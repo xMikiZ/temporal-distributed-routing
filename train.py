@@ -1,0 +1,262 @@
+"""
+ScaIR training script.
+
+Usage examples
+--------------
+# Train on Abilene with defaults:
+python train.py --topo data/Abi/Topology.txt --tm_dir "data/Abi/traffic matrix"
+
+# Train with custom hyperparameters:
+python train.py --topo data/Abi/Topology.txt --tm_dir "data/Abi/traffic matrix" \\
+    --feature_length 64 --packets 100 --episodes 200
+
+# Save checkpoints every 50 episodes to ./runs/exp1:
+python train.py --topo data/Abi/Topology.txt --tm_dir "data/Abi/traffic matrix" \\
+    --save_dir runs/exp1
+
+Run `python train.py --help` for all options.
+"""
+
+import argparse
+import json
+import os
+import random
+import sys
+import time
+
+import numpy as np
+import torch
+
+from scair.agent import IRrAgent
+from scair.config import ScaIRConfig
+from scair.data_loader import load_all_traffic_matrices, load_topology, normalise_tm
+from scair.environment import RoutingEnvironment
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Train ScaIR routing agents")
+
+    # Data
+    p.add_argument("--topo", required=True,
+                   help="Path to topology file (Abilene format)")
+    p.add_argument("--tm_dir", required=True,
+                   help="Directory containing traffic-matrix .dat files")
+    p.add_argument("--link_weights", default=None,
+                   help="Optional link_weight.json for per-link delays")
+
+    # Training
+    p.add_argument("--episodes", type=int, default=None,
+                   help="Override max_episodes from config")
+    p.add_argument("--packets", type=int, default=None,
+                   help="Override packets_per_episode from config")
+
+    # Sub-GNN
+    p.add_argument("--feature_length", type=int, default=None,
+                   help="Feature vector length F_l (default 128)")
+    p.add_argument("--neural_units", type=int, default=None,
+                   help="Hidden units N_u (default 64)")
+    p.add_argument("--gnn_iters", type=int, default=None,
+                   help="Sub-GNN periodic update iterations I_n (default 3)")
+
+    # Traffic
+    p.add_argument("--gen_interval", type=float, default=None,
+                   help="Mean Poisson inter-arrival time G_i (default 0.5 ms)")
+    p.add_argument("--dist_ratio", type=float, default=None,
+                   help="Hot-spot traffic ratio D_r (default 0.0)")
+
+    # Misc
+    p.add_argument("--save_dir", type=str, default="checkpoints",
+                   help="Directory to save model checkpoints")
+    p.add_argument("--save_freq", type=int, default=50,
+                   help="Save checkpoint every N episodes (0 = only at end)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="Random seed for reproducibility")
+    p.add_argument("--log_interval", type=int, default=10,
+                   help="Print stats every N episodes")
+
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def build_agents(topo, cfg: ScaIRConfig) -> list:
+    return [
+        IRrAgent(
+            node_id=n,
+            neighbours=topo.adjacency[n],
+            num_nodes=topo.num_nodes,
+            cfg=cfg,
+        )
+        for n in range(topo.num_nodes)
+    ]
+
+
+def save_checkpoint(agents: list, episode: int, save_dir: str) -> None:
+    os.makedirs(save_dir, exist_ok=True)
+    state = {
+        str(n): {
+            "sub_gnn": agents[n].sub_gnn.state_dict(),
+            "q_net": agents[n].q_net.state_dict(),
+            "sigma": agents[n].sigma,
+        }
+        for n in range(len(agents))
+    }
+    path = os.path.join(save_dir, f"episode_{episode:04d}.pt")
+    torch.save(state, path)
+    print(f"  [checkpoint saved to {path}]")
+
+
+def load_checkpoint(agents: list, path: str) -> None:
+    state = torch.load(path, map_location="cpu")
+    for n in range(len(agents)):
+        key = str(n)
+        if key in state:
+            agents[n].sub_gnn.load_state_dict(state[key]["sub_gnn"])
+            agents[n].q_net.load_state_dict(state[key]["q_net"])
+            agents[n].sigma = state[key].get("sigma", agents[n].cfg.sigma_min)
+    print(f"Loaded checkpoint from {path}")
+
+
+# ---------------------------------------------------------------------------
+# Training loop  (Algorithm 1)
+# ---------------------------------------------------------------------------
+
+def train(args: argparse.Namespace) -> None:
+    # ---- config ----
+    cfg = ScaIRConfig()
+    if args.episodes is not None:
+        cfg.max_episodes = args.episodes
+    if args.packets is not None:
+        cfg.packets_per_episode = args.packets
+    if args.feature_length is not None:
+        cfg.feature_length = args.feature_length
+    if args.neural_units is not None:
+        cfg.neural_units = args.neural_units
+    if args.gnn_iters is not None:
+        cfg.gnn_update_iters = args.gnn_iters
+    if args.gen_interval is not None:
+        cfg.generation_interval = args.gen_interval
+    if args.dist_ratio is not None:
+        cfg.distribution_ratio = args.dist_ratio
+    if args.save_dir:
+        cfg.save_dir = args.save_dir
+    if args.log_interval:
+        cfg.log_interval = args.log_interval
+    if args.seed is not None:
+        cfg.seed = args.seed
+
+    # ---- reproducibility ----
+    if cfg.seed is not None:
+        random.seed(cfg.seed)
+        np.random.seed(cfg.seed)
+        torch.manual_seed(cfg.seed)
+
+    # ---- data ----
+    print(f"Loading topology from {args.topo}")
+    topo = load_topology(args.topo, link_weight_file=args.link_weights)
+    print(f"  {topo.num_nodes} nodes, {sum(len(v) for v in topo.adjacency.values())//2} links")
+
+    print(f"Loading traffic matrices from {args.tm_dir}")
+    raw_tms = load_all_traffic_matrices(args.tm_dir, topo.num_nodes)
+    tms = [normalise_tm(tm) for tm in raw_tms]
+    print(f"  {len(tms)} traffic matrices loaded")
+
+    # ---- check config dimensions ----
+    max_deg = max(len(nbrs) for nbrs in topo.adjacency.values())
+    if topo.num_nodes > cfg.max_nodes:
+        cfg.max_nodes = topo.num_nodes
+        print(f"  auto-adjusted max_nodes = {cfg.max_nodes}")
+    if max_deg > cfg.max_degree:
+        cfg.max_degree = max_deg
+        print(f"  auto-adjusted max_degree = {cfg.max_degree}")
+
+    # ---- agents ----
+    agents = build_agents(topo, cfg)
+    print(f"Created {len(agents)} IRr agents")
+
+    # ---- environment ----
+    env = RoutingEnvironment(topo, cfg)
+
+    # ---- training loop ----
+    print(f"\nStarting training: {cfg.max_episodes} episodes, "
+          f"{cfg.packets_per_episode} packets/episode\n")
+
+    history = []
+    episode_sigmas = [agents[0].sigma]
+
+    for ep in range(1, cfg.max_episodes + 1):
+        t0 = time.time()
+
+        # Cycle through traffic matrices
+        tm = tms[(ep - 1) % len(tms)]
+
+        # Generate packets
+        packets = env.generate_packets(tm, cfg.packets_per_episode)
+
+        # Run one episode (Algorithm 1)
+        stats = env.run_episode(packets, agents, training=True)
+        history.append(stats)
+
+        # ---- learning-rate schedule (paper §5.1: L_r=0.1 for ep<=10, 0.001 after) ----
+        if ep == 10:
+            for agent in agents:
+                agent.set_learning_rate(cfg.learning_rate)
+
+        # ---- target network update every target_update_freq episodes ----
+        if ep % cfg.target_update_freq == 0:
+            for agent in agents:
+                agent.update_target()
+
+        # ---- sigma decay every sigma_decay_freq episodes ----
+        if ep % cfg.sigma_decay_freq == 0:
+            for agent in agents:
+                agent.decay_sigma()
+
+        elapsed = time.time() - t0
+
+        if ep % cfg.log_interval == 0 or ep == 1:
+            sigma = agents[0].sigma
+            print(
+                f"Episode {ep:4d}/{cfg.max_episodes}  "
+                f"avg_time={stats['avg_delivery_time']:7.3f} ms  "
+                f"avg_hops={stats['avg_hops']:5.2f}  "
+                f"delivered={stats['delivered']:3d}/{cfg.packets_per_episode}  "
+                f"loss={stats['avg_loss']:.4f}  "
+                f"sigma={sigma:.2f}  "
+                f"({elapsed:.1f}s)"
+            )
+
+        # ---- checkpoint ----
+        if args.save_freq > 0 and ep % args.save_freq == 0:
+            save_checkpoint(agents, ep, cfg.save_dir)
+
+    # ---- final checkpoint ----
+    save_checkpoint(agents, cfg.max_episodes, cfg.save_dir)
+
+    # ---- save training history ----
+    history_path = os.path.join(cfg.save_dir, "history.json")
+    with open(history_path, "w") as f:
+        json.dump(
+            {"episodes": list(range(1, len(history) + 1)), "stats": history},
+            f,
+            indent=2,
+        )
+    print(f"  [training history saved to {history_path}]")
+    print("\nTraining complete.")
+
+    return agents, history
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    args = parse_args()
+    train(args)
