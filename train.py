@@ -73,6 +73,9 @@ def parse_args() -> argparse.Namespace:
                    help="Directory to save model checkpoints")
     p.add_argument("--save_freq", type=int, default=50,
                    help="Save checkpoint every N episodes (0 = only at end)")
+    p.add_argument("--resume", type=str, default=None, metavar="CHECKPOINT",
+                   help="Resume training from this checkpoint file "
+                        "(episode number is inferred from the filename)")
     p.add_argument("--seed", type=int, default=None,
                    help="Random seed for reproducibility")
     p.add_argument("--log_interval", type=int, default=10,
@@ -180,17 +183,35 @@ def train(args: argparse.Namespace) -> None:
     agents = build_agents(topo, cfg)
     print(f"Created {len(agents)} IRr agents")
 
+    # ---- resume from checkpoint ----
+    start_ep = 1
+    history = []
+    if args.resume:
+        load_checkpoint(agents, args.resume)
+        # Infer the episode number from the filename (e.g. episode_0400.pt -> 400)
+        basename = os.path.splitext(os.path.basename(args.resume))[0]
+        try:
+            start_ep = int(basename.split("_")[-1]) + 1
+        except ValueError:
+            start_ep = 1
+        print(f"  Resuming from episode {start_ep}")
+        # Load existing history so the final history.json stays continuous
+        history_path = os.path.join(cfg.save_dir, "history.json")
+        if os.path.exists(history_path):
+            with open(history_path) as f:
+                saved = json.load(f)
+            history = saved.get("stats", [])
+            print(f"  Loaded {len(history)} existing history entries")
+
     # ---- environment ----
     env = RoutingEnvironment(topo, cfg)
 
     # ---- training loop ----
-    print(f"\nStarting training: {cfg.max_episodes} episodes, "
+    remaining = cfg.max_episodes - (start_ep - 1)
+    print(f"\nStarting training: episodes {start_ep}–{start_ep + remaining - 1}, "
           f"{cfg.packets_per_episode} packets/episode\n")
 
-    history = []
-    episode_sigmas = [agents[0].sigma]
-
-    for ep in range(1, cfg.max_episodes + 1):
+    for ep in range(start_ep, start_ep + remaining):
         t0 = time.time()
 
         # Cycle through traffic matrices
@@ -237,7 +258,8 @@ def train(args: argparse.Namespace) -> None:
             save_checkpoint(agents, ep, cfg.save_dir)
 
     # ---- final checkpoint ----
-    save_checkpoint(agents, cfg.max_episodes, cfg.save_dir)
+    last_ep = start_ep + remaining - 1
+    save_checkpoint(agents, last_ep, cfg.save_dir)
 
     # ---- save training history ----
     history_path = os.path.join(cfg.save_dir, "history.json")
