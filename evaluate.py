@@ -193,6 +193,9 @@ def run_q_routing(
                 hops_list.append(hop_counts[pkt.pid])
                 continue
 
+            if hop_counts[pkt.pid] >= cfg.max_hops:
+                continue
+
             agent = agents[node]
             _, next_node = agent.select_action(pkt.destination)
 

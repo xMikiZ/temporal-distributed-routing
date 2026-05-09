@@ -189,13 +189,6 @@ class RoutingEnvironment:
                 self._handle_arrive(
                     ev, agents, training, delivery_times, hops_list, hop_counts, losses
                 )
-            elif ev.kind == "dequeue":
-                # Decrement the queue at the sender once the packet has left
-                from_node = ev.data["from_node"]
-                to_node = ev.data["to_node"]
-                agents[from_node].queue_lengths[to_node] = max(
-                    0, agents[from_node].queue_lengths[to_node] - 1
-                )
 
         avg_delivery = float(np.mean(delivery_times)) if delivery_times else float("inf")
         avg_hops = float(np.mean(hops_list)) if hops_list else 0.0
@@ -246,8 +239,6 @@ class RoutingEnvironment:
 
         # ---- build state components BEFORE decision (stored in replay buffer) ----
         partial_state = agent.build_partial_state(pkt.destination)
-        with torch.no_grad():
-            fv = agent.sub_gnn.get_output().detach()   # GNN feature vector at decision time
 
         # ---- action: choose next hop (σ-greedy, paper Eq. 5) ----
         action_idx, next_node = agent.select_action(pkt.destination)
@@ -278,10 +269,17 @@ class RoutingEnvironment:
 
         # ---- training (Algorithm 1, lines 12-19) ----
         if training:
-            # e_t = min_â Q̂_next(Ŝ, â)  (paper §4.3 / Eq. 6)
-            e_t = agents[next_node].min_q_value(pkt.destination)
+            # e_t = min_â Q̂_next(Ŝ, â)  (paper §4.3 / Eq. 6).
+            # If next_node IS the destination no further routing happens there,
+            # so the true remaining cost is 0.  The destination node's Q-values
+            # are random (it never makes routing decisions and is never trained),
+            # so using them would inflate targets for every last-hop transition.
+            if next_node == pkt.destination:
+                e_t = 0.0
+            else:
+                e_t = agents[next_node].min_q_value(pkt.destination)
 
-            agent.store_transition(partial_state, fv, cost, action_idx, e_t)
+            agent.store_transition(partial_state, cost, action_idx, e_t)
 
             # Gradient descent every L_c ticks
             if agent.tick % self.cfg.learning_cycle == 0:

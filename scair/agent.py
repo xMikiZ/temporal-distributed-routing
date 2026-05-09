@@ -29,21 +29,16 @@ from .models import QNetwork, SubGNN
 # ---------------------------------------------------------------------------
 
 class Transition:
-    # Full state captured at decision time: partial_state + fv from SubGNN.
-    # Storing fv ensures train_step uses the exact feature vector the agent
-    # observed, preventing drift as GNN weights change during training.
-    __slots__ = ("partial_state", "fv", "cost", "action", "estimated_time")
+    __slots__ = ("partial_state", "cost", "action", "estimated_time")
 
     def __init__(
         self,
         partial_state: torch.Tensor,   # dest_oh + queue_lengths + action_history
-        fv: torch.Tensor,              # SubGNN output at decision time
         cost: float,
         action: int,
         estimated_time: float,
     ) -> None:
         self.partial_state = partial_state
-        self.fv = fv
         self.cost = cost
         self.action = action
         self.estimated_time = estimated_time
@@ -240,12 +235,11 @@ class IRrAgent:
     def store_transition(
         self,
         partial_state: torch.Tensor,
-        fv: torch.Tensor,
         cost: float,
         action_idx: int,
         estimated_time: float,
     ) -> None:
-        self.memory.push(Transition(partial_state.detach(), fv.detach(), cost, action_idx, estimated_time))
+        self.memory.push(Transition(partial_state.detach(), cost, action_idx, estimated_time))
 
     def train_step(self) -> Optional[float]:
         """
@@ -269,17 +263,19 @@ class IRrAgent:
         B = len(batch)
 
         partial_states = torch.stack([t.partial_state for t in batch])   # [B, partial_dim]
-        fv_batch       = torch.stack([t.fv            for t in batch])   # [B, F_l]
         actions = torch.tensor([t.action for t in batch], dtype=torch.long)
         costs = torch.tensor([t.cost for t in batch], dtype=torch.float32)
         e_ts = torch.tensor([t.estimated_time for t in batch], dtype=torch.float32)
 
-        # Assemble full state using the fv captured at decision time (per sample).
-        # This ensures each sample's state is exactly what the agent observed,
-        # regardless of how GNN weights have changed since.
+        # Live differentiable fv: gradients flow to f_w and g_w (paper Eq. 8 joint update).
+        # Using the current GNN state (one fv for the whole batch) is consistent with
+        # having a single SubGNN per agent; the same approach is used during action selection.
+        fv_live = self.sub_gnn.get_output_trainable(self._nbr_fvs)        # [F_l]
+        fv_expanded = fv_live.unsqueeze(0).expand(B, -1)                  # [B, F_l]
+
         q_end = self.cfg.max_nodes + self.cfg.max_degree
         states = torch.cat(
-            [partial_states[:, :q_end], fv_batch, partial_states[:, q_end:]], dim=1
+            [partial_states[:, :q_end], fv_expanded, partial_states[:, q_end:]], dim=1
         )   # [B, input_dim]
 
         # Target y = c + gamma * e_t  (Eq. 6)
@@ -332,11 +328,17 @@ class IRrAgent:
             self.sub_gnn.iterate(fv_list)
 
     def reset_episode(self) -> None:
-        """Reset per-episode state: queues, action history, tick counter."""
+        """Reset per-episode state: queues, action history, GNN buffer.
+
+        tick is intentionally NOT reset here.  Algorithm 1 uses a single
+        global decision counter t that runs across episodes; resetting it
+        per episode means low-traffic agents (fewer than learning_cycle
+        decisions per episode) never reach the modulo condition and
+        therefore never call train_step or the GNN periodic update.
+        """
         self.queue_lengths = {n: 0 for n in self.neighbours}
         self._action_history = deque(
             [-1] * self.cfg.action_history_len, maxlen=self.cfg.action_history_len
         )
-        self.tick = 0
         self._nbr_fvs = []
         self.sub_gnn.reset()
