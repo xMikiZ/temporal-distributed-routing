@@ -12,10 +12,12 @@ with a single RMSprop optimiser (paper §4.3, Eq. 7-8):
     theta*_n, g*_n <- GradientDescent( (y - Q_n(s_n, a_n | theta_n, g_n))^2 )
 """
 
+import math
 import random
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -142,8 +144,12 @@ class IRrAgent:
         # Decision tick counter (used for learning_cycle and GNN update triggers)
         self.tick: int = 0
 
-        # Exploration rate
+        # Exploration rate (epsilon-greedy)
         self.sigma: float = cfg.sigma_initial
+
+        # UCB action counts: dest -> [count_per_action]
+        # Accumulated across episodes (not reset) so UCB estimates improve over time.
+        self._ucb_counts: Dict[int, List[int]] = {}
 
         self._num_nodes = num_nodes
 
@@ -195,22 +201,56 @@ class IRrAgent:
 
     def select_action(self, destination: int) -> Tuple[int, int]:
         """
-        sigma-greedy policy (paper Eq. 5):
-          with probability sigma  -> random action
-          with probability 1-sigma -> argmin Q
-
+        Dispatches to epsilon-greedy or UCB depending on cfg.action_method.
         Returns (action_index, neighbour_node_id).
         """
-        if random.random() < self.sigma:
-            idx = random.randrange(self.degree)
+        if self.cfg.action_method == "ucb":
+            idx = self._select_action_ucb(destination)
         else:
-            state = self.build_state(destination)
-            with torch.no_grad():
-                q_vals = self.q_net(state.unsqueeze(0))[0, : self.degree]
-            idx = int(q_vals.argmin().item())
+            idx = self._select_action_epsilon_greedy(destination)
 
         self._action_history.append(idx)
         return idx, self.neighbours[idx]
+
+    def _select_action_epsilon_greedy(self, destination: int) -> int:
+        """sigma-greedy policy (paper Eq. 5)."""
+        if random.random() < self.sigma:
+            return random.randrange(self.degree)
+        state = self.build_state(destination)
+        with torch.no_grad():
+            q_vals = self.q_net(state.unsqueeze(0))[0, : self.degree]
+        return int(q_vals.argmin().item())
+
+    def _select_action_ucb(self, destination: int) -> int:
+        """
+        Lower Confidence Bound (LCB) for cost minimisation:
+            a* = argmin_a [ Q(s,a) - c * sqrt( ln(N+1) / n_a ) ]
+
+        Actions with lower estimated cost OR fewer visits are preferred.
+        Unvisited actions are tried first (count=0 → infinite bonus).
+        Counts accumulate across episodes.
+        """
+        if destination not in self._ucb_counts:
+            self._ucb_counts[destination] = [0] * self.degree
+
+        counts = self._ucb_counts[destination]
+
+        # Force exploration of any unvisited action first
+        for idx, c in enumerate(counts):
+            if c == 0:
+                counts[idx] += 1
+                return idx
+
+        state = self.build_state(destination)
+        with torch.no_grad():
+            q_vals = self.q_net(state.unsqueeze(0))[0, : self.degree].cpu().numpy()
+
+        total = sum(counts)
+        bonus = self.cfg.ucb_c * np.sqrt(math.log(total + 1) / np.array(counts, dtype=float))
+        lcb = q_vals - bonus
+        idx = int(np.argmin(lcb))
+        counts[idx] += 1
+        return idx
 
     # ------------------------------------------------------------------
     # Min-Q for next-hop feedback  (e_t in the paper)

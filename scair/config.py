@@ -65,6 +65,14 @@ class ScaIRConfig:
     max_degree: int = 10      # upper bound on node degree (for padding)
     action_history_len: int = 5   # k: number of past actions kept in state
 
+    # ----- Action selection -----
+    # "epsilon_greedy" (default) or "ucb"
+    action_method: str = "epsilon_greedy"
+    # UCB exploration constant c (Lower Confidence Bound for cost minimisation).
+    # The selected action is argmin_a [ Q(s,a) - c * sqrt(ln(N+1) / n_a) ].
+    # Higher c -> more exploration.  Needs tuning relative to Q-value scale (ms).
+    ucb_c: float = 2.0
+
     # ----- Misc -----
     seed: Optional[int] = None
     save_dir: str = "checkpoints"

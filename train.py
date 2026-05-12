@@ -68,6 +68,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dist_ratio", type=float, default=None,
                    help="Hot-spot traffic ratio D_r (default 0.0)")
 
+    # Action selection
+    p.add_argument("--action_method", type=str, default=None,
+                   choices=["epsilon_greedy", "ucb"],
+                   help="Action selection method (default: epsilon_greedy)")
+    p.add_argument("--ucb_c", type=float, default=None,
+                   help="UCB exploration constant c (default 2.0)")
+
     # Misc
     p.add_argument("--save_dir", type=str, default="checkpoints",
                    help="Directory to save model checkpoints")
@@ -147,6 +154,10 @@ def train(args: argparse.Namespace) -> None:
         cfg.generation_interval = args.gen_interval
     if args.dist_ratio is not None:
         cfg.distribution_ratio = args.dist_ratio
+    if args.action_method is not None:
+        cfg.action_method = args.action_method
+    if args.ucb_c is not None:
+        cfg.ucb_c = args.ucb_c
     if args.save_dir:
         cfg.save_dir = args.save_dir
     if args.log_interval:
@@ -207,7 +218,7 @@ def train(args: argparse.Namespace) -> None:
     env = RoutingEnvironment(topo, cfg)
 
     # ---- training loop ----
-    remaining = cfg.max_episodes - (start_ep - 1)
+    remaining = cfg.max_episodes
     print(f"\nStarting training: episodes {start_ep}–{start_ep + remaining - 1}, "
           f"{cfg.packets_per_episode} packets/episode\n")
 
