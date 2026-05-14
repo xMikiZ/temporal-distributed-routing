@@ -287,6 +287,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--episodes", type=int, default=100,
                    help="Evaluation episodes (default 100)")
     p.add_argument("--packets", type=int, default=50)
+    p.add_argument("--dist_ratio", type=float, default=0.5,
+                   help="Hot-spot traffic ratio D_r (default 0.5)")
     p.add_argument("--feature_length", type=int, default=128)
     p.add_argument("--neural_units", type=int, default=64)
     p.add_argument("--seed", type=int, default=42)
@@ -311,6 +313,7 @@ def evaluate(args: argparse.Namespace) -> None:
         neural_units=args.neural_units,
         packets_per_episode=args.packets,
         max_episodes=args.episodes,
+        distribution_ratio=args.dist_ratio,
         sigma_initial=0.1,
         sigma_min=0.1,
     )
