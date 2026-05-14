@@ -125,8 +125,9 @@ class QNetwork(nn.Module):
     Input (paper §4.2, all concatenated):
         1. Destination one-hot          [max_nodes]
         2. Queue lengths (padded)       [max_degree]
-        3. Feature vector from SubGNN   [feature_length]
-        4. Action history               [action_history_len * max_degree]
+        3. Per-link delays (padded)     [max_degree]  -- only when delay_input=True
+        4. Feature vector from SubGNN   [feature_length]
+        5. Action history               [action_history_len * max_degree]
 
     Output:
         Q-values for each possible action (neighbour), padded to [max_degree].
@@ -143,6 +144,7 @@ class QNetwork(nn.Module):
         feature_length: int,
         neural_units: int,
         action_history_len: int,
+        delay_input: bool = False,
     ) -> None:
         super().__init__()
         self.max_degree = max_degree
@@ -150,6 +152,7 @@ class QNetwork(nn.Module):
         input_dim = (
             max_nodes                           # destination one-hot
             + max_degree                        # queue lengths
+            + (max_degree if delay_input else 0)  # per-link propagation delays
             + feature_length                    # GNN feature vector
             + action_history_len * max_degree   # action history one-hots
         )

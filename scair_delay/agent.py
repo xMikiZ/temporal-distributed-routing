@@ -89,12 +89,22 @@ class IRrAgent:
         neighbours: List[int],
         num_nodes: int,
         cfg: ScaIRConfig,
+        link_delays: Optional[Dict[int, float]] = None,
+        max_delay: float = 1.0,
     ) -> None:
         self.node_id = node_id
         self.neighbours = neighbours          # ordered list of neighbour node IDs
         self.degree = len(neighbours)
         self._nbr_to_idx: Dict[int, int] = {n: i for i, n in enumerate(neighbours)}
         self.cfg = cfg
+
+        # Per-link propagation delays [max_degree], normalised to [0, 1] by max_delay.
+        # Only populated (and used) when cfg.delay_input is True.
+        self._delay_vec: torch.Tensor = torch.zeros(cfg.max_degree)
+        if cfg.delay_input and link_delays:
+            for i, nbr in enumerate(neighbours):
+                if i < cfg.max_degree:
+                    self._delay_vec[i] = float(link_delays.get(nbr, 0.0)) / max(max_delay, 1e-6)
 
         # Neural networks
         self.sub_gnn = SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
@@ -104,6 +114,7 @@ class IRrAgent:
             feature_length=cfg.feature_length,
             neural_units=cfg.neural_units,
             action_history_len=cfg.action_history_len,
+            delay_input=cfg.delay_input,
         )
         # Target network: frozen copy of q_net used to compute e_t.
         # Updated periodically via update_target(); never trained directly.
@@ -113,6 +124,7 @@ class IRrAgent:
             feature_length=cfg.feature_length,
             neural_units=cfg.neural_units,
             action_history_len=cfg.action_history_len,
+            delay_input=cfg.delay_input,
         )
         self.q_net_target.load_state_dict(self.q_net.state_dict())
         for p in self.q_net_target.parameters():
@@ -180,6 +192,8 @@ class IRrAgent:
             if act >= 0 and act < self.cfg.max_degree:
                 hist[step * self.cfg.max_degree + act] = 1.0
 
+        if self.cfg.delay_input:
+            return torch.cat([dest_oh, q_vec, self._delay_vec, hist])
         return torch.cat([dest_oh, q_vec, hist])
 
     def build_state(self, destination: int) -> torch.Tensor:
@@ -190,10 +204,11 @@ class IRrAgent:
         partial = self.build_partial_state(destination)
         with torch.no_grad():
             fv = self.sub_gnn.get_output().detach()
-        # Insert fv between queue lengths and action history to match QNetwork layout
-        dest_end = self.cfg.max_nodes
-        q_end = dest_end + self.cfg.max_degree
-        return torch.cat([partial[:q_end], fv, partial[q_end:]])
+        # Insert fv after queue lengths (and delays if enabled), before action history.
+        split = self.cfg.max_nodes + self.cfg.max_degree
+        if self.cfg.delay_input:
+            split += self.cfg.max_degree
+        return torch.cat([partial[:split], fv, partial[split:]])
 
     # ------------------------------------------------------------------
     # Action selection
@@ -313,9 +328,11 @@ class IRrAgent:
         fv_live = self.sub_gnn.get_output_trainable(self._nbr_fvs)        # [F_l]
         fv_expanded = fv_live.unsqueeze(0).expand(B, -1)                  # [B, F_l]
 
-        q_end = self.cfg.max_nodes + self.cfg.max_degree
+        split = self.cfg.max_nodes + self.cfg.max_degree
+        if self.cfg.delay_input:
+            split += self.cfg.max_degree
         states = torch.cat(
-            [partial_states[:, :q_end], fv_expanded, partial_states[:, q_end:]], dim=1
+            [partial_states[:, :split], fv_expanded, partial_states[:, split:]], dim=1
         )   # [B, input_dim]
 
         # Target y = c + gamma * e_t  (Eq. 6)

@@ -71,6 +71,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dist_ratio", type=float, default=None,
                    help="Hot-spot traffic ratio D_r (default 0.5)")
 
+    # Q-network input options
+    p.add_argument("--delay_input", action="store_true",
+                   help="Add per-link propagation delays as Q-network inputs (option 2)")
+
     # Action selection
     p.add_argument("--action_method", type=str, default=None,
                    choices=["epsilon_greedy", "ucb"],
@@ -98,12 +102,15 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def build_agents(topo, cfg: ScaIRConfig) -> list:
+    max_delay = max(topo.link_delays.values()) if topo.link_delays else 1.0
     return [
         IRrAgent(
             node_id=n,
             neighbours=topo.adjacency[n],
             num_nodes=topo.num_nodes,
             cfg=cfg,
+            link_delays={nb: topo.delay(n, nb) for nb in topo.adjacency[n]},
+            max_delay=max_delay,
         )
         for n in range(topo.num_nodes)
     ]
@@ -156,6 +163,8 @@ def train(args: argparse.Namespace) -> None:
         cfg.generation_interval = args.gen_interval
     if args.dist_ratio is not None:
         cfg.distribution_ratio = args.dist_ratio
+    if args.delay_input:
+        cfg.delay_input = True
     if args.action_method is not None:
         cfg.action_method = args.action_method
     if args.ucb_c is not None:

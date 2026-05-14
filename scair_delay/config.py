@@ -65,6 +65,10 @@ class ScaIRConfig:
     max_degree: int = 10      # upper bound on node degree (for padding)
     action_history_len: int = 5   # k: number of past actions kept in state
 
+    # ----- Q-network input options -----
+    # When True, adds per-link propagation delays [max_degree] to Q-net input.
+    delay_input: bool = False
+
     # ----- Action selection -----
     # "epsilon_greedy" (default) or "ucb"
     action_method: str = "epsilon_greedy"
