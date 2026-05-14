@@ -281,11 +281,12 @@ class RoutingEnvironment:
 
             agent.store_transition(partial_state, cost, action_idx, e_t)
 
-            # Gradient descent every L_c ticks
+            # Gradient descent every L_c ticks, followed by soft target update
             if agent.tick % self.cfg.learning_cycle == 0:
                 loss = agent.train_step()
                 if loss is not None:
                     losses.append(loss)
+                    agent.update_target()
 
             # Periodic sub-GNN update (paper §3 step 5: "periodically sends FV")
             if agent.tick % self.cfg.gnn_update_period == 0:

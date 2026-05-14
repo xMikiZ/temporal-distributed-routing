@@ -251,10 +251,6 @@ def train(args: argparse.Namespace) -> None:
             for agent in agents:
                 agent.set_learning_rate(cfg.learning_rate)
 
-        if ep % cfg.target_update_freq == 0:
-            for agent in agents:
-                agent.update_target()
-
         if ep % cfg.sigma_decay_freq == 0:
             for agent in agents:
                 agent.decay_sigma()

@@ -38,7 +38,7 @@ class ScaIRConfig:
     memory_size: int = 200          # M_s
     batch_size: int = 64            # B_s
     learning_cycle: int = 10        # L_c: ticks between weight updates
-    target_update_freq: int = 10    # episodes between target-network hard updates
+    tau: float = 0.01               # Polyak coefficient for soft target updates
 
     # ----- Episode / traffic -----
     max_episodes: int = 400

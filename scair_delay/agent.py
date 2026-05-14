@@ -357,8 +357,10 @@ class IRrAgent:
         return float(loss.item())
 
     def update_target(self) -> None:
-        """Hard-copy live q_net weights into q_net_target."""
-        self.q_net_target.load_state_dict(self.q_net.state_dict())
+        """Soft (Polyak) update: θ_target ← τ*θ_live + (1-τ)*θ_target."""
+        tau = self.cfg.tau
+        for p_live, p_target in zip(self.q_net.parameters(), self.q_net_target.parameters()):
+            p_target.data.mul_(1.0 - tau).add_(tau * p_live.data)
 
     def set_learning_rate(self, lr: float) -> None:
         # Only update the Q-net group (index 0); GNN LR stays fixed.
