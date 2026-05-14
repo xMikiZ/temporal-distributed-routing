@@ -69,6 +69,10 @@ class ScaIRConfig:
     # When True, adds per-link propagation delays [max_degree] to Q-net input.
     delay_input: bool = False
 
+    # ----- GNN init options -----
+    # When True, V_0 is seeded with normalised neighbour delays instead of pure one-hot.
+    delay_init: bool = False
+
     # ----- Action selection -----
     # "epsilon_greedy" (default) or "ucb"
     action_method: str = "epsilon_greedy"

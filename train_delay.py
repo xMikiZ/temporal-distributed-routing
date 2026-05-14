@@ -74,6 +74,8 @@ def parse_args() -> argparse.Namespace:
     # Q-network input options
     p.add_argument("--delay_input", action="store_true",
                    help="Add per-link propagation delays as Q-network inputs (option 2)")
+    p.add_argument("--delay_init", action="store_true",
+                   help="Seed V_0 with normalised neighbour delays instead of pure one-hot (option 3)")
 
     # Action selection
     p.add_argument("--action_method", type=str, default=None,
@@ -165,6 +167,8 @@ def train(args: argparse.Namespace) -> None:
         cfg.distribution_ratio = args.dist_ratio
     if args.delay_input:
         cfg.delay_input = True
+    if args.delay_init:
+        cfg.delay_init = True
     if args.action_method is not None:
         cfg.action_method = args.action_method
     if args.ucb_c is not None:

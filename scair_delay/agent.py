@@ -99,15 +99,17 @@ class IRrAgent:
         self.cfg = cfg
 
         # Per-link propagation delays [max_degree], normalised to [0, 1] by max_delay.
-        # Only populated (and used) when cfg.delay_input is True.
+        # Computed whenever delay_input or delay_init is enabled.
         self._delay_vec: torch.Tensor = torch.zeros(cfg.max_degree)
-        if cfg.delay_input and link_delays:
+        if (cfg.delay_input or cfg.delay_init) and link_delays:
             for i, nbr in enumerate(neighbours):
                 if i < cfg.max_degree:
                     self._delay_vec[i] = float(link_delays.get(nbr, 0.0)) / max(max_delay, 1e-6)
 
         # Neural networks
-        self.sub_gnn = SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
+        gnn_delay_vec = self._delay_vec if cfg.delay_init else None
+        self.sub_gnn = SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units,
+                              delay_vec=gnn_delay_vec)
         self.q_net = QNetwork(
             max_nodes=cfg.max_nodes,
             max_degree=cfg.max_degree,

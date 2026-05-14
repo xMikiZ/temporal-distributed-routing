@@ -18,7 +18,7 @@ Design decision (not specified in paper):
 
 import torch
 import torch.nn as nn
-from typing import List
+from typing import List, Optional
 
 
 class SubGNN(nn.Module):
@@ -41,9 +41,11 @@ class SubGNN(nn.Module):
         num_nodes: int,
         feature_length: int,
         neural_units: int,
+        delay_vec: Optional[torch.Tensor] = None,
     ) -> None:
         super().__init__()
         self.node_id = node_id
+        self.num_nodes = num_nodes
         self.feature_length = feature_length
 
         # f_w: concat(V_own [F_l], mean_neighbours [F_l]) -> V_new [F_l]
@@ -60,12 +62,33 @@ class SubGNN(nn.Module):
             nn.Linear(neural_units, feature_length),
         )
 
-        # Initialise V as one-hot of node_id, zero-padded to feature_length (Eq. 4)
-        V_init = torch.zeros(feature_length)
+        # Build V_0: one-hot identity in first max_nodes dims,
+        # normalised neighbour delays in next max_degree dims (if delay_vec given).
+        self._delay_vec = delay_vec  # stored for reset()
+        self.register_buffer("V", self._make_v_init(node_id, num_nodes, feature_length, delay_vec))
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_v_init(
+        node_id: int,
+        num_nodes: int,
+        feature_length: int,
+        delay_vec: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        V = torch.zeros(feature_length)
         if node_id < feature_length:
-            V_init[node_id] = 1.0
-        # V is a plain tensor updated with no_grad; it is NOT a parameter
-        self.register_buffer("V", V_init)
+            V[node_id] = 1.0
+        if delay_vec is not None:
+            # Delays start at num_nodes so layout is identical for all nodes:
+            # [0..num_nodes-1]: node one-hot  |  [num_nodes..num_nodes+max_degree-1]: delays
+            d = delay_vec.shape[0]
+            start = num_nodes
+            end = min(start + d, feature_length)
+            V[start:end] = delay_vec[: end - start]
+        return V
 
     # ------------------------------------------------------------------
     # Public interface
@@ -111,11 +134,10 @@ class SubGNN(nn.Module):
         return self.g_w(V_one_step)         # grad flows to g_w.weight too
 
     def reset(self) -> None:
-        """Reset V to the initial one-hot representation (start of episode)."""
-        V_init = torch.zeros(self.feature_length, device=self.V.device)
-        if self.node_id < self.feature_length:
-            V_init[self.node_id] = 1.0
-        self.V = V_init.detach()
+        """Reset V to the initial representation (start of episode)."""
+        self.V = self._make_v_init(
+            self.node_id, self.num_nodes, self.feature_length, self._delay_vec
+        ).to(self.V.device).detach()
 
 
 class QNetwork(nn.Module):

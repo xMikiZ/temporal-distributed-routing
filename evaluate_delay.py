@@ -293,6 +293,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--neural_units", type=int, default=64)
     p.add_argument("--delay_input", action="store_true",
                    help="Add per-link propagation delays as Q-network inputs (option 2)")
+    p.add_argument("--delay_init", action="store_true",
+                   help="Seed V_0 with normalised neighbour delays instead of pure one-hot (option 3)")
     p.add_argument("--seed", type=int, default=42)
     return p.parse_args()
 
@@ -317,6 +319,7 @@ def evaluate(args: argparse.Namespace) -> None:
         max_episodes=args.episodes,
         distribution_ratio=args.dist_ratio,
         delay_input=args.delay_input,
+        delay_init=args.delay_init,
         sigma_initial=0.1,
         sigma_min=0.1,
     )
