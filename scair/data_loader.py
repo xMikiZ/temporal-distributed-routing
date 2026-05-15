@@ -13,6 +13,7 @@ topologies with their real-world traffic matrices from the Abilene dataset.
 import json
 import os
 import glob
+import xml.etree.ElementTree as ET
 from math import gcd
 from functools import reduce
 from typing import Dict, List, Optional, Tuple
@@ -102,6 +103,25 @@ def load_traffic_matrix(tm_file: str, num_nodes: int) -> np.ndarray:
 
     if ext == ".npy":
         tm = np.load(tm_file).astype(np.float64)
+    elif ext == ".xml":
+        # GEANT XML format: <src id="X"><dst id="Y">value</dst>...</src>
+        # Node IDs are 1-indexed; we convert to 0-indexed.
+        tree = ET.parse(tm_file)
+        root = tree.getroot()
+        # Find the IntraTM element (ignore namespace variations)
+        values: Dict[Tuple[int, int], float] = {}
+        max_id = 0
+        for src_el in root.iter("src"):
+            src_id = int(src_el.get("id")) - 1   # 0-indexed
+            max_id = max(max_id, src_id)
+            for dst_el in src_el:
+                dst_id = int(dst_el.get("id")) - 1
+                max_id = max(max_id, dst_id)
+                values[(src_id, dst_id)] = float(dst_el.text)
+        size = max_id + 1
+        tm = np.zeros((size, size), dtype=np.float64)
+        for (i, j), v in values.items():
+            tm[i, j] = v
     else:
         # Try text/CSV with possible '#' comments
         rows: List[List[float]] = []
@@ -133,7 +153,7 @@ def load_all_traffic_matrices(tm_dir: str, num_nodes: int) -> List[np.ndarray]:
     Load all .dat (and .npy / .txt) traffic matrix files from a directory.
     Returns a list of (num_nodes, num_nodes) arrays, sorted by filename.
     """
-    patterns = ["*.dat", "*.npy", "*.txt"]
+    patterns = ["*.dat", "*.npy", "*.txt", "*.xml"]
     files: List[str] = []
     for pat in patterns:
         files.extend(glob.glob(os.path.join(tm_dir, pat)))
