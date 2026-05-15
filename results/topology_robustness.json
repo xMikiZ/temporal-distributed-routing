@@ -1,0 +1,30 @@
+{
+  "Add Node 11 (\u21920, \u21928)": {
+    "scair": {
+      "A: Pre-change": 10.104099999999999,
+      "B: Immediate": 25.18693978822744,
+      "C: Adaptation": 22.189290822104248,
+      "D: Recovered": 20.93601285439322
+    },
+    "ospf": {
+      "A: Pre-change": 11.0276,
+      "B: Immediate": 11.4964,
+      "C: Adaptation": 10.867750000000001,
+      "D: Recovered": 11.176099999999996
+    }
+  },
+  "Remove Link 3-6": {
+    "scair": {
+      "A: Pre-change": 10.026800000000001,
+      "B: Immediate": 10.469319228897431,
+      "C: Adaptation": 22.795331325451063,
+      "D: Recovered": 20.878843034749075
+    },
+    "ospf": {
+      "A: Pre-change": 11.442,
+      "B: Immediate": 11.2584,
+      "C: Adaptation": 11.2104,
+      "D: Recovered": 10.9701
+    }
+  }
+}

@@ -89,6 +89,7 @@ class IRrAgent:
         neighbours: List[int],
         num_nodes: int,
         cfg: ScaIRConfig,
+        shared_sub_gnn: Optional["SubGNN"] = None,
     ) -> None:
         self.node_id = node_id
         self.neighbours = neighbours          # ordered list of neighbour node IDs
@@ -96,8 +97,12 @@ class IRrAgent:
         self._nbr_to_idx: Dict[int, int] = {n: i for i, n in enumerate(neighbours)}
         self.cfg = cfg
 
-        # Neural networks
-        self.sub_gnn = SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
+        # Neural networks.
+        # shared_sub_gnn: when provided all agents share f_w/g_w (only Q-net is per-agent).
+        self._owns_gnn = shared_sub_gnn is None
+        self.sub_gnn = shared_sub_gnn if shared_sub_gnn is not None else \
+            SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
+
         self.q_net = QNetwork(
             max_nodes=cfg.max_nodes,
             max_degree=cfg.max_degree,
@@ -118,12 +123,13 @@ class IRrAgent:
         for p in self.q_net_target.parameters():
             p.requires_grad_(False)
 
-        # Joint optimiser for SubGNN + QNetwork (paper Eq. 8, RMSprop).
-        # GNN uses a lower LR than Q-net: sharing Q-net's LR=0.1 would shift
-        # the GNN output too fast and destabilise the Q-net input.
+        # Joint optimiser: SubGNN included only by the agent that owns it.
+        # Agents sharing a SubGNN train only their own Q-net; the owning agent trains the GNN.
+        gnn_params = [{"params": self.sub_gnn.parameters(), "lr": cfg.gnn_learning_rate}] \
+                     if self._owns_gnn else []
         self.optimizer = torch.optim.RMSprop([
-            {"params": self.q_net.parameters(),   "lr": cfg.learning_rate_initial},
-            {"params": self.sub_gnn.parameters(), "lr": cfg.gnn_learning_rate},
+            {"params": self.q_net.parameters(), "lr": cfg.learning_rate_initial},
+            *gnn_params,
         ])
 
         # Replay memory
@@ -381,4 +387,5 @@ class IRrAgent:
             [-1] * self.cfg.action_history_len, maxlen=self.cfg.action_history_len
         )
         self._nbr_fvs = []
-        self.sub_gnn.reset()
+        if self._owns_gnn:
+            self.sub_gnn.reset()

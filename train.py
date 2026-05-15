@@ -107,6 +107,25 @@ def build_agents(topo, cfg: ScaIRConfig) -> list:
     ]
 
 
+def build_agents_shared_gnn(topo, cfg: ScaIRConfig) -> list:
+    """All agents share a single SubGNN (f_w, g_w). Only agent 0 owns and trains it."""
+    from scair.models import SubGNN
+    shared_gnn = SubGNN(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
+    agents = []
+    for n in range(topo.num_nodes):
+        agent = IRrAgent(
+            node_id=n,
+            neighbours=topo.adjacency[n],
+            num_nodes=topo.num_nodes,
+            cfg=cfg,
+            shared_sub_gnn=shared_gnn if n > 0 else None,
+        )
+        if n == 0:
+            shared_gnn = agent.sub_gnn  # capture the instance agent 0 created
+        agents.append(agent)
+    return agents
+
+
 def save_checkpoint(agents: list, episode: int, save_dir: str) -> None:
     os.makedirs(save_dir, exist_ok=True)
     state = {
