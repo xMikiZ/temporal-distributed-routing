@@ -107,8 +107,7 @@ def apply_mutation(topo, mutation: str):
         for nb in nbrs:
             if node in t.adjacency.get(nb, []):
                 t.adjacency[nb].remove(node)
-        del t.adjacency[node]
-        # Don't decrement num_nodes — just leave node 5 unreachable
+        t.adjacency[node] = []  # keep key so range(num_nodes) doesn't KeyError
     return t
 
 
@@ -247,6 +246,31 @@ def evaluate(agents, topo, cfg, tms, n_eps, offset=0) -> float:
 # Run one variant through all mutations
 # ---------------------------------------------------------------------------
 
+def _add_node_agent(new_id, new_topo, new_cfg, is_shared, gnn_cls, agents):
+    """Create a new agent for node new_id after an add_node mutation.
+
+    For shared variants: the new agent reuses f_w/g_w from agents[0] via
+    make_shared_node_gnn so weights stay shared.  For per-node variants a
+    fresh IRrAgent is created with its own SubGNN.
+    """
+    from scair.agent import IRrAgent
+    nbrs = new_topo.adjacency[new_id]
+    if is_shared:
+        from scair.models import make_shared_node_gnn
+        # agents[0].sub_gnn already has the right f_w/g_w (shared tensors)
+        new_gnn = make_shared_node_gnn(new_id, new_cfg.feature_length, agents[0].sub_gnn)
+        return IRrAgent(
+            node_id=new_id, neighbours=nbrs,
+            num_nodes=new_topo.num_nodes, cfg=new_cfg,
+            shared_sub_gnn=new_gnn, shared_gnn_opt=None,
+        )
+    return IRrAgent(
+        node_id=new_id, neighbours=nbrs,
+        num_nodes=new_topo.num_nodes, cfg=new_cfg,
+        gnn_cls=gnn_cls,
+    )
+
+
 def run_variant(vkey, vname, color, is_shared, gnn_cls, base_topo, tms, base_cfg):
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
 
@@ -264,37 +288,48 @@ def run_variant(vkey, vname, color, is_shared, gnn_cls, base_topo, tms, base_cfg
         # Apply mutation
         new_topo = apply_mutation(base_topo, mut_key)
         new_cfg = copy.copy(base_cfg)
-        max_deg = max(len(v) for v in new_topo.adjacency.values())
+        max_deg = max(len(v) for v in new_topo.adjacency.values() if v)
         if new_topo.num_nodes > new_cfg.max_nodes:
             new_cfg.max_nodes = new_topo.num_nodes
         if max_deg > new_cfg.max_degree:
             new_cfg.max_degree = max_deg
 
+        # For add_node: create an agent for the new node before env calls agents[new_id]
+        eval_agents = list(agents)
+        if mut_key == "add_node":
+            new_id = base_topo.num_nodes  # node 11
+            eval_agents = agents + [_add_node_agent(new_id, new_topo, new_cfg,
+                                                    is_shared, gnn_cls, agents)]
+
         # OSPF on new topology
         t_ospf = run_ospf(new_topo, new_cfg, tms, EVAL_EPS, N_PACKETS)
 
         # Phase B: immediate eval on new topology (no adaptation)
-        try:
-            t_B = evaluate(agents, new_topo, new_cfg, tms, EVAL_EPS, offset=TRAIN_EPS)
-        except Exception:
-            t_B = float("inf")
+        t_B = evaluate(eval_agents, new_topo, new_cfg, tms, EVAL_EPS, offset=TRAIN_EPS)
 
         # Phase C: adaptation
-        adapt_curve = train(agents, new_topo, new_cfg, tms, ADAPT_EPS, is_shared)
+        adapt_curve = train(eval_agents, new_topo, new_cfg, tms, ADAPT_EPS, is_shared)
 
         # Phase D: post-adaptation eval
-        t_D = evaluate(agents, new_topo, new_cfg, tms, EVAL_EPS, offset=TRAIN_EPS + ADAPT_EPS)
+        t_D = evaluate(eval_agents, new_topo, new_cfg, tms, EVAL_EPS,
+                       offset=TRAIN_EPS + ADAPT_EPS)
+
+        # Degradation: how much worse immediately after change (vs pre-change)
+        # Recovery: what fraction of the degradation was recovered by adaptation
+        degrade = (t_B - t_A) / max(t_A, 1e-6) * 100
+        recover = (t_B - t_D) / max(abs(t_B - t_A) + 1e-6, 1e-6) * 100
 
         mutation_results[mut_key] = {
             "phase_A": t_A, "phase_B": t_B, "phase_D": t_D,
             "ospf_new": t_ospf,
             "adapt_curve": adapt_curve,
-            "degradation_pct": (t_B - t_A) / max(t_A, 1e-6) * 100,
-            "recovery_pct": (t_B - t_D) / max(t_B - t_A + 1e-6, 1e-6) * 100,
+            "degradation_pct": degrade,
+            "recovery_pct": recover,
         }
-        print(f"      A={t_A:.2f}ms  B={t_B:.2f}ms  D={t_D:.2f}ms  OSPF={t_ospf:.2f}ms")
+        print(f"      A={t_A:.2f}ms  B={t_B:.2f}ms  D={t_D:.2f}ms  "
+              f"OSPF={t_ospf:.2f}ms  degrade={degrade:+.1f}%  recover={recover:.1f}%")
 
-        # Reset agents to base topology state for next mutation test
+        # Reset agents to trained base-topology state for the next mutation
         random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
         agents = build(vkey, is_shared, gnn_cls, base_topo, base_cfg)
         train(agents, base_topo, base_cfg, tms, TRAIN_EPS, is_shared)
