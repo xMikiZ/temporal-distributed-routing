@@ -47,7 +47,7 @@ from train import build_agents, build_agents_shared_gnn
 
 TOPO_FILE      = "data/ABI/Topology.txt"
 TM_DIR         = "data/ABI/TrafficMatrix"
-RESULTS        = "results"
+RESULTS        = "results/01_dr_comparison"
 SEED           = 42
 
 DR_VALUES      = [0.0, 0.2, 0.4, 0.6, 0.8]
