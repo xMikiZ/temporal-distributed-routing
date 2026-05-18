@@ -2,22 +2,26 @@
 Neural network modules for ScaIR.
 
 Two networks per agent (§4):
-  SubGNN  -- distributed graph neural network N_Gsub (§4.1)
-  QNetwork -- deep Q-network N_Q                     (§4.2)
+  SubGNN         -- distributed GNN with mean aggregation (§4.1)
+  AttentionSubGNN -- same but uses softmax(dot-product) attention aggregation
+  QNetwork       -- deep Q-network N_Q (§4.2)
 
 Architecture details (paper §4.1 / §4.2):
   - Both f_w and g_w are feedforward NNs with ReLU activation.
-  - "Same architecture but different parameters for different nodes."
-  - Optimiser: RMSprop  (paper §4.3: "root mean square propagation")
-  - Activation: ReLU    (paper §4.3: "rectified linear unit")
+  - Optimiser: RMSprop  (paper §4.3)
+  - Activation: ReLU    (paper §4.3)
 
-Design decision (not specified in paper):
-  f_w^n takes concat(V_own, mean(V_neighbors)) as input.
-  Mean aggregation is standard GCN practice and handles variable-degree nodes.
+Aggregation variants:
+  SubGNN:          agg = mean(V_neighbors)
+  AttentionSubGNN: scores_i = dot(V_own, V_nbr_i)
+                   weights  = softmax(scores)
+                   agg      = weighted_sum(V_neighbors, weights)
+  No learnable weight matrices in the attention — pure dot-product similarity.
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from typing import List
 
 
@@ -116,6 +120,44 @@ class SubGNN(nn.Module):
         if self.node_id < self.feature_length:
             V_init[self.node_id] = 1.0
         self.V = V_init.detach()
+
+
+class AttentionSubGNN(SubGNN):
+    """
+    SubGNN variant that replaces mean aggregation with dot-product attention.
+
+    Attention (no learnable weight matrices):
+        scores_i = dot(V_own, V_nbr_i)          scalar per neighbour
+        weights  = softmax(scores)               normalised
+        agg      = sum_i( weights_i * V_nbr_i )  weighted sum
+
+    Falls back to V_own zeros (no neighbours) or the single FV (one neighbour)
+    exactly as SubGNN does.  f_w / g_w architecture and all other behaviour
+    are inherited unchanged.
+    """
+
+    def _attend(self, V_own: torch.Tensor, nbr_Vs: List[torch.Tensor]) -> torch.Tensor:
+        """Attention-weighted aggregation of neighbour feature vectors."""
+        if not nbr_Vs:
+            return torch.zeros(self.feature_length, device=V_own.device)
+        if len(nbr_Vs) == 1:
+            return nbr_Vs[0]
+        nbr_stack = torch.stack(nbr_Vs)                    # [N, F_l]
+        scores = (nbr_stack * V_own.unsqueeze(0)).sum(-1)  # [N]  dot products
+        weights = F.softmax(scores, dim=0)                 # [N]
+        return (weights.unsqueeze(1) * nbr_stack).sum(0)   # [F_l]
+
+    def iterate(self, neighbour_Vs: List[torch.Tensor]) -> None:
+        with torch.no_grad():
+            agg = self._attend(self.V, [v.detach() for v in neighbour_Vs])
+            inp = torch.cat([self.V.detach(), agg.detach()])
+            self.V = self.f_w(inp).detach()
+
+    def get_output_trainable(self, neighbour_Vs: List[torch.Tensor]) -> torch.Tensor:
+        agg = self._attend(self.V.detach(), [v.detach() for v in neighbour_Vs])
+        inp = torch.cat([self.V.detach(), agg.detach()])
+        V_one_step = self.f_w(inp)
+        return self.g_w(V_one_step)
 
 
 class QNetwork(nn.Module):

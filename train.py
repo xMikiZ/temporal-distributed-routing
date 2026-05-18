@@ -95,27 +95,32 @@ def parse_args() -> argparse.Namespace:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def build_agents(topo, cfg: ScaIRConfig) -> list:
+def build_agents(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
+    """Per-node SubGNN agents.  Pass gnn_cls=AttentionSubGNN for attention variant."""
     return [
         IRrAgent(
             node_id=n,
             neighbours=topo.adjacency[n],
             num_nodes=topo.num_nodes,
             cfg=cfg,
+            gnn_cls=gnn_cls,
         )
         for n in range(topo.num_nodes)
     ]
 
 
-def build_agents_shared_gnn(topo, cfg: ScaIRConfig) -> list:
+def build_agents_shared_gnn(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
     """All agents share one SubGNN (f_w, g_w weights).
 
     Every agent accumulates gradients into the shared SubGNN during each
     train_step(); call agents[0].shared_gnn_step(len(agents)) once per
     episode to average and apply those gradients.
+
+    Pass gnn_cls=AttentionSubGNN for the attention-aggregation variant.
     """
-    from scair.models import SubGNN
-    shared_gnn = SubGNN(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
+    from scair.models import SubGNN, AttentionSubGNN
+    cls = gnn_cls or SubGNN
+    shared_gnn = cls(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
     shared_gnn_opt = torch.optim.RMSprop(
         shared_gnn.parameters(), lr=cfg.gnn_learning_rate
     )

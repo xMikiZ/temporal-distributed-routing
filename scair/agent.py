@@ -93,6 +93,7 @@ class IRrAgent:
         cfg: ScaIRConfig,
         shared_sub_gnn: Optional["SubGNN"] = None,
         shared_gnn_opt: Optional[torch.optim.Optimizer] = None,
+        gnn_cls=None,
     ) -> None:
         self.node_id = node_id
         self.neighbours = neighbours          # ordered list of neighbour node IDs
@@ -105,8 +106,11 @@ class IRrAgent:
         #                gradients accumulate from every agent and are stepped once per episode
         #                via shared_gnn_step() on the agent that holds self.gnn_optimizer.
         self._owns_gnn = shared_sub_gnn is None
-        self.sub_gnn = shared_sub_gnn if shared_sub_gnn is not None else \
-            SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
+        if shared_sub_gnn is not None:
+            self.sub_gnn = shared_sub_gnn
+        else:
+            cls = gnn_cls if gnn_cls is not None else SubGNN
+            self.sub_gnn = cls(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
 
         self.q_net = QNetwork(
             max_nodes=cfg.max_nodes,
