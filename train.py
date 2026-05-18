@@ -110,28 +110,35 @@ def build_agents(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
 
 
 def build_agents_shared_gnn(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
-    """All agents share one SubGNN (f_w, g_w weights).
+    """All agents share f_w / g_w weights but each keeps its own V state.
 
-    Every agent accumulates gradients into the shared SubGNN during each
+    A template SubGNN owns the weight tensors; every agent receives a
+    SharedWeightsSubGNN wrapper that points to those same tensors but
+    holds a separate V buffer.  This is the correct "shared weights"
+    interpretation: topology-aware feature vectors differ per node while
+    the aggregation / output networks are jointly trained.
+
+    Every agent accumulates gradients into the shared f_w / g_w during
     train_step(); call agents[0].shared_gnn_step(len(agents)) once per
-    episode to average and apply those gradients.
+    training episode to average and apply those gradients.
 
     Pass gnn_cls=AttentionSubGNN for the attention-aggregation variant.
     """
-    from scair.models import SubGNN, AttentionSubGNN
+    from scair.models import SubGNN, AttentionSubGNN, make_shared_node_gnn
     cls = gnn_cls or SubGNN
-    shared_gnn = cls(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
+    template = cls(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
     shared_gnn_opt = torch.optim.RMSprop(
-        shared_gnn.parameters(), lr=cfg.gnn_learning_rate
+        template.parameters(), lr=cfg.gnn_learning_rate
     )
     agents = []
     for n in range(topo.num_nodes):
+        node_gnn = make_shared_node_gnn(n, cfg.feature_length, template)
         agent = IRrAgent(
             node_id=n,
             neighbours=topo.adjacency[n],
             num_nodes=topo.num_nodes,
             cfg=cfg,
-            shared_sub_gnn=shared_gnn,
+            shared_sub_gnn=node_gnn,
             shared_gnn_opt=shared_gnn_opt if n == 0 else None,
         )
         agents.append(agent)

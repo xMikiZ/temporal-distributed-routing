@@ -422,7 +422,6 @@ class IRrAgent:
             [-1] * self.cfg.action_history_len, maxlen=self.cfg.action_history_len
         )
         self._nbr_fvs = []
-        # Per-node: each agent resets its own SubGNN.
-        # Shared mode: only the owner agent resets (others share the same instance).
-        if self._owns_gnn or self.gnn_optimizer is not None:
-            self.sub_gnn.reset()
+        # Always reset V: per-node agents own their SubGNN; shared-mode agents
+        # each have their own V state via SharedWeightsSubGNN.
+        self.sub_gnn.reset()

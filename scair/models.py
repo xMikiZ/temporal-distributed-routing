@@ -122,6 +122,44 @@ class SubGNN(nn.Module):
         self.V = V_init.detach()
 
 
+def make_shared_node_gnn(node_id: int, feature_length: int, template: "SubGNN") -> "SubGNN":
+    """
+    Create a per-node GNN that shares f_w / g_w weights with *template* but
+    keeps an independent V state buffer.
+
+    The returned object is an instance of a dynamically-created subclass of
+    type(template) (SubGNN *or* AttentionSubGNN), so iterate() and
+    get_output_trainable() use the correct aggregation method.  parameters()
+    is overridden to return nothing — the template's optimizer covers f_w / g_w.
+
+    Correct "shared weights" semantics
+    -----------------------------------
+    Without this, all agents share the same SubGNN object including V.
+    Every agent's iterate() call overwrites V in sequence, so all nodes end
+    up with the same feature vector (last writer wins).  With this factory,
+    each node has its own V while the aggregation networks are truly shared.
+    """
+    base_cls = type(template)
+
+    class _NodeGNN(base_cls):
+        def __init__(self) -> None:
+            nn.Module.__init__(self)
+            self.node_id = node_id
+            self.feature_length = feature_length
+            self.f_w = template.f_w          # shared tensor references
+            self.g_w = template.g_w
+            V_init = torch.zeros(feature_length)
+            if node_id < feature_length:
+                V_init[node_id] = 1.0
+            self.register_buffer("V", V_init)
+
+        def parameters(self, recurse: bool = True):
+            return iter([])                  # weights owned by template; no double-count
+
+    _NodeGNN.__name__ = f"Shared{base_cls.__name__}[{node_id}]"
+    return _NodeGNN()
+
+
 class AttentionSubGNN(SubGNN):
     """
     SubGNN variant that replaces mean aggregation with dot-product attention.
