@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     # Misc
     p.add_argument("--save_dir", type=str, default="checkpoints",
                    help="Directory to save model checkpoints")
-    p.add_argument("--save_freq", type=int, default=50,
+    p.add_argument("--save_freq", type=int, default=400,
                    help="Save checkpoint every N episodes (0 = only at end)")
     p.add_argument("--resume", type=str, default=None, metavar="CHECKPOINT",
                    help="Resume training from this checkpoint file "
