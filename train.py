@@ -108,9 +108,17 @@ def build_agents(topo, cfg: ScaIRConfig) -> list:
 
 
 def build_agents_shared_gnn(topo, cfg: ScaIRConfig) -> list:
-    """All agents share a single SubGNN (f_w, g_w). Only agent 0 owns and trains it."""
+    """All agents share one SubGNN (f_w, g_w weights).
+
+    Every agent accumulates gradients into the shared SubGNN during each
+    train_step(); call agents[0].shared_gnn_step(len(agents)) once per
+    episode to average and apply those gradients.
+    """
     from scair.models import SubGNN
     shared_gnn = SubGNN(0, topo.num_nodes, cfg.feature_length, cfg.neural_units)
+    shared_gnn_opt = torch.optim.RMSprop(
+        shared_gnn.parameters(), lr=cfg.gnn_learning_rate
+    )
     agents = []
     for n in range(topo.num_nodes):
         agent = IRrAgent(
@@ -118,10 +126,9 @@ def build_agents_shared_gnn(topo, cfg: ScaIRConfig) -> list:
             neighbours=topo.adjacency[n],
             num_nodes=topo.num_nodes,
             cfg=cfg,
-            shared_sub_gnn=shared_gnn if n > 0 else None,
+            shared_sub_gnn=shared_gnn,
+            shared_gnn_opt=shared_gnn_opt if n == 0 else None,
         )
-        if n == 0:
-            shared_gnn = agent.sub_gnn  # capture the instance agent 0 created
         agents.append(agent)
     return agents
 

@@ -7,9 +7,12 @@ Each agent n owns:
   - ReplayMemory D_n
   - Per-interface queue-length counters
 
-The combined parameter set of SubGNN + QNetwork is optimised jointly
-with a single RMSprop optimiser (paper §4.3, Eq. 7-8):
-    theta*_n, g*_n <- GradientDescent( (y - Q_n(s_n, a_n | theta_n, g_n))^2 )
+Per-node mode: each agent owns and trains its own SubGNN jointly with
+its Q-net via a single RMSprop optimiser (paper §4.3, Eq. 7-8).
+
+Shared-GNN mode: all agents share one SubGNN instance.  Every agent
+accumulates gradients into it during train_step(); a single averaged
+update is applied once per episode via shared_gnn_step() on agent 0.
 """
 
 import math
@@ -19,7 +22,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from .config import ScaIRConfig
@@ -90,6 +92,7 @@ class IRrAgent:
         num_nodes: int,
         cfg: ScaIRConfig,
         shared_sub_gnn: Optional["SubGNN"] = None,
+        shared_gnn_opt: Optional[torch.optim.Optimizer] = None,
     ) -> None:
         self.node_id = node_id
         self.neighbours = neighbours          # ordered list of neighbour node IDs
@@ -97,8 +100,10 @@ class IRrAgent:
         self._nbr_to_idx: Dict[int, int] = {n: i for i, n in enumerate(neighbours)}
         self.cfg = cfg
 
-        # Neural networks.
-        # shared_sub_gnn: when provided all agents share f_w/g_w (only Q-net is per-agent).
+        # Per-node mode: _owns_gnn=True, each agent has its own SubGNN trained via self.optimizer.
+        # Shared mode:   _owns_gnn=False, all agents point to the same SubGNN instance;
+        #                gradients accumulate from every agent and are stepped once per episode
+        #                via shared_gnn_step() on the agent that holds self.gnn_optimizer.
         self._owns_gnn = shared_sub_gnn is None
         self.sub_gnn = shared_sub_gnn if shared_sub_gnn is not None else \
             SubGNN(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
@@ -123,14 +128,20 @@ class IRrAgent:
         for p in self.q_net_target.parameters():
             p.requires_grad_(False)
 
-        # Joint optimiser: SubGNN included only by the agent that owns it.
-        # Agents sharing a SubGNN train only their own Q-net; the owning agent trains the GNN.
-        gnn_params = [{"params": self.sub_gnn.parameters(), "lr": cfg.gnn_learning_rate}] \
-                     if self._owns_gnn else []
-        self.optimizer = torch.optim.RMSprop([
-            {"params": self.q_net.parameters(), "lr": cfg.learning_rate_initial},
-            *gnn_params,
-        ])
+        # Per-node: joint optimiser includes SubGNN + Q-net.
+        # Shared mode: each agent's optimiser covers only its own Q-net; the shared SubGNN
+        # is updated separately via gnn_optimizer (held only by the designated owner agent).
+        if self._owns_gnn:
+            self.optimizer = torch.optim.RMSprop([
+                {"params": self.q_net.parameters(), "lr": cfg.learning_rate_initial},
+                {"params": self.sub_gnn.parameters(), "lr": cfg.gnn_learning_rate},
+            ])
+        else:
+            self.optimizer = torch.optim.RMSprop([
+                {"params": self.q_net.parameters(), "lr": cfg.learning_rate_initial},
+            ])
+        # Separate GNN optimiser for shared mode (non-None only on the owner agent).
+        self.gnn_optimizer: Optional[torch.optim.Optimizer] = shared_gnn_opt
 
         # Replay memory
         self.memory = ReplayMemory(cfg.memory_size)
@@ -335,13 +346,33 @@ class IRrAgent:
 
         self.optimizer.zero_grad()
         loss.backward()
-        # Gradient clipping: stabilises training with the high initial LR=0.1
-        torch.nn.utils.clip_grad_norm_(
-            list(self.sub_gnn.parameters()) + list(self.q_net.parameters()), max_norm=1.0
-        )
+        # Per-node: clip SubGNN + Q-net jointly.
+        # Shared mode: clip Q-net only; SubGNN grads accumulate across agents and are
+        # clipped+stepped once per episode in shared_gnn_step().
+        if self._owns_gnn:
+            torch.nn.utils.clip_grad_norm_(
+                list(self.sub_gnn.parameters()) + list(self.q_net.parameters()), max_norm=1.0
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(list(self.q_net.parameters()), max_norm=1.0)
         self.optimizer.step()
 
         return float(loss.item())
+
+    def shared_gnn_step(self, n_agents: int) -> None:
+        """Average accumulated SubGNN gradients across all agents, then step.
+
+        Call once per training episode on the owner agent (the one with
+        gnn_optimizer).  No-op in per-node mode or on non-owner agents.
+        """
+        if self.gnn_optimizer is None:
+            return
+        for p in self.sub_gnn.parameters():
+            if p.grad is not None:
+                p.grad /= n_agents
+        torch.nn.utils.clip_grad_norm_(self.sub_gnn.parameters(), max_norm=1.0)
+        self.gnn_optimizer.step()
+        self.gnn_optimizer.zero_grad()
 
     def update_target(self) -> None:
         """Hard-copy live q_net weights into q_net_target."""
@@ -387,5 +418,7 @@ class IRrAgent:
             [-1] * self.cfg.action_history_len, maxlen=self.cfg.action_history_len
         )
         self._nbr_fvs = []
-        if self._owns_gnn:
+        # Per-node: each agent resets its own SubGNN.
+        # Shared mode: only the owner agent resets (others share the same instance).
+        if self._owns_gnn or self.gnn_optimizer is not None:
             self.sub_gnn.reset()

@@ -154,6 +154,8 @@ def run_one(label: str, topo, tms, cfg: ScaIRConfig, use_shared_gnn: bool) -> di
         tm    = tms[(ep - 1) % len(tms)]
         pkts  = env.generate_packets(tm, cfg.packets_per_episode)
         stats = env.run_episode(pkts, agents, training=True)
+        if use_shared_gnn:
+            agents[0].shared_gnn_step(len(agents))
         train_curve.append(stats["avg_delivery_time"])
 
         if ep == 10:
