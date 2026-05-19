@@ -1,0 +1,147 @@
+{
+  "config": {
+    "train_eps": 300,
+    "eval_eps": 50,
+    "adapt_eps": 200,
+    "d_r": 0.4,
+    "seed": 42
+  },
+  "results": {
+    "per_node": {
+      "add_node": {
+        "phase_A": 3.5506,
+        "phase_B": 5.904238987100507,
+        "phase_D": 5.136139551003283,
+        "ospf_new": 3.4936000000000003,
+        "degradation_pct": 66.28848608968927,
+        "recovery_pct": 32.634533756518145
+      },
+      "remove_link": {
+        "phase_A": 3.5506,
+        "phase_B": 3.5114000000000005,
+        "phase_D": 3.3183999999999996,
+        "ospf_new": 3.8819999999999997,
+        "degradation_pct": -1.1040387540133971,
+        "recovery_pct": 492.33437922502617
+      },
+      "add_link": {
+        "phase_A": 3.5506,
+        "phase_B": 3.5114000000000005,
+        "phase_D": 3.3681999999999994,
+        "ospf_new": 3.7465999999999995,
+        "degradation_pct": -1.1040387540133971,
+        "recovery_pct": 365.29680365297384
+      },
+      "remove_node": {
+        "phase_A": 3.5506,
+        "phase_B": 3.5114000000000005,
+        "phase_D": 3.303,
+        "ospf_new": 4.7951423731583365,
+        "degradation_pct": -1.1040387540133971,
+        "recovery_pct": 531.6190913497163
+      }
+    },
+    "shared": {
+      "add_node": {
+        "phase_A": 3.6052000000000004,
+        "phase_B": 5.796258556444399,
+        "phase_D": 5.085222467427393,
+        "ospf_new": 3.5806000000000004,
+        "degradation_pct": 60.77495163775652,
+        "recovery_pct": 32.451700681786086
+      },
+      "remove_link": {
+        "phase_A": 3.6052000000000004,
+        "phase_B": 3.6116,
+        "phase_D": 3.37,
+        "ospf_new": 4.0708,
+        "degradation_pct": 0.17752135803838176,
+        "recovery_pct": 3774.410248398842
+      },
+      "add_link": {
+        "phase_A": 3.6052000000000004,
+        "phase_B": 3.6116,
+        "phase_D": 3.3538,
+        "ospf_new": 3.9221999999999997,
+        "degradation_pct": 0.17752135803838176,
+        "recovery_pct": 4027.4957037964464
+      },
+      "remove_node": {
+        "phase_A": 3.6052000000000004,
+        "phase_B": 3.6116,
+        "phase_D": 3.2902000000000005,
+        "ospf_new": 5.040194659994619,
+        "degradation_pct": 0.17752135803838176,
+        "recovery_pct": 5021.090454616666
+      }
+    },
+    "attn_per_node": {
+      "add_node": {
+        "phase_A": 3.5046,
+        "phase_B": 5.927223921722861,
+        "phase_D": 5.2117027326723315,
+        "ospf_new": 3.4906000000000006,
+        "degradation_pct": 69.12697374087946,
+        "recovery_pct": 29.534955355023897
+      },
+      "remove_link": {
+        "phase_A": 3.5046,
+        "phase_B": 3.6480000000000006,
+        "phase_D": 3.306800000000001,
+        "ospf_new": 3.9396,
+        "degradation_pct": 4.091765108714279,
+        "recovery_pct": 237.9341845593812
+      },
+      "add_link": {
+        "phase_A": 3.5046,
+        "phase_B": 3.6480000000000006,
+        "phase_D": 3.3674,
+        "ospf_new": 3.8246,
+        "degradation_pct": 4.091765108714279,
+        "recovery_pct": 195.6750650274401
+      },
+      "remove_node": {
+        "phase_A": 3.5046,
+        "phase_B": 3.6480000000000006,
+        "phase_D": 3.3066000000000004,
+        "ospf_new": 4.879638804195045,
+        "degradation_pct": 4.091765108714279,
+        "recovery_pct": 238.073653600741
+      }
+    },
+    "attn_shared": {
+      "add_node": {
+        "phase_A": 3.4742,
+        "phase_B": 5.635798914007981,
+        "phase_D": 6.300975258173542,
+        "ospf_new": 3.2826,
+        "degradation_pct": 62.21860900374131,
+        "recovery_pct": -30.77240796758774
+      },
+      "remove_link": {
+        "phase_A": 3.4742,
+        "phase_B": 3.6091999999999995,
+        "phase_D": 3.1875999999999998,
+        "ospf_new": 3.7786,
+        "degradation_pct": 3.8857866559207683,
+        "recovery_pct": 312.2939830075346
+      },
+      "add_link": {
+        "phase_A": 3.4742,
+        "phase_B": 3.6091999999999995,
+        "phase_D": 3.248,
+        "ospf_new": 3.6790000000000003,
+        "degradation_pct": 3.8857866559207683,
+        "recovery_pct": 267.5535736772328
+      },
+      "remove_node": {
+        "phase_A": 3.4742,
+        "phase_B": 3.55,
+        "phase_D": 3.2582,
+        "ospf_new": 4.734400007708493,
+        "degradation_pct": 2.1817972482873653,
+        "recovery_pct": 384.95534359705175
+      }
+    }
+  }
+}
