@@ -112,7 +112,13 @@ class RoutingEnvironment:
         G_i is used as the mean inter-arrival time between consecutive packets.
         """
         n = self.topo.num_nodes
-        tm = traffic_matrix[:n, :n].copy().astype(float)
+        tm_src = traffic_matrix.shape[0]
+        if tm_src >= n:
+            tm = traffic_matrix[:n, :n].copy().astype(float)
+        else:
+            # TM smaller than topology (e.g. after add_node): zero-pad
+            tm = np.zeros((n, n), dtype=float)
+            tm[:tm_src, :tm_src] = traffic_matrix[:tm_src, :tm_src]
         np.fill_diagonal(tm, 0.0)
 
         total = tm.sum()
