@@ -257,6 +257,60 @@ The `ScaIRConfig` dataclass in [scair/config.py](scair/config.py) exposes all hy
 
 ---
 
+## Experiments
+
+Two validation experiments are provided in `experiments/`. Run both sequentially:
+
+```bash
+bash experiments/run_all_experiments.sh
+```
+
+Or individually:
+
+```bash
+python experiments/comparison_experiment.py       # ~15 min
+python experiments/topology_robustness_variants.py  # ~2 hrs
+```
+
+### Experiment 1 — D_r Sweep (`experiments/comparison_experiment.py`)
+
+Compares all four ScaIR variants against a queue-simulating OSPF baseline across five hot-spot ratios D_r ∈ {0.0, 0.2, 0.4, 0.6, 0.8}. All variants are trained from scratch (300 episodes) and evaluated (50 episodes) at each D_r.
+
+**Variants tested:**
+- **Per-node SubGNN** — independent SubGNN per router, mean aggregation
+- **Shared SubGNN** — all routers share f_w/g_w weights (per-node V state), mean aggregation
+- **Per-node Attention** — independent SubGNN per router, dot-product attention aggregation
+- **Shared Attention** — shared weights with attention aggregation
+
+**Key result:** ScaIR outperforms OSPF by 35–57% at D_r ≥ 0.6; OSPF is slightly better at D_r ≤ 0.2. All variants perform nearly identically.
+
+Outputs: `results/01_dr_comparison/`
+
+### Experiment 2 — Topology Robustness (`experiments/topology_robustness_variants.py`)
+
+Tests all four variants under four topology mutations (add node, remove link, add link, remove node) using a 4-phase A→B→C→D protocol. Phase B measures immediate degradation; Phase D measures post-adaptation recovery.
+
+Outputs: `results/02_topology_robustness/`
+
+### Results and Conclusions
+
+Full quantitative results and scientific conclusions are in [`results/CONCLUSIONS.md`](results/CONCLUSIONS.md).
+
+```
+results/
+├── CONCLUSIONS.md                  # Scientific conclusions from all experiments
+├── 01_dr_comparison/
+│   ├── comparison_dr_sweep.png     # Delivery time vs D_r (all variants)
+│   ├── comparison_training_curves.png
+│   └── comparison_experiment.json
+└── 02_topology_robustness/
+    ├── robustness_summary.png      # Phase A/B/D bar chart per mutation
+    ├── adaptation_curves.png       # Online adaptation training curves
+    └── robustness_results.json
+```
+
+---
+
 ## Implementation Notes and Deviations from the Paper
 
 The paper leaves several design choices open or ambiguous. Below are the choices made in this implementation, and where they differ from the paper.
@@ -292,6 +346,10 @@ The paper uses the next-hop agent's Q-network to estimate e_t (the expected futu
 ### Gradient clipping
 
 Gradient norm is clipped to 1.0 during each training step. The paper does not mention this. It was added to prevent occasional large gradient spikes during the early exploration phase (high σ) when Q-values are poorly initialised.
+
+### Last-hop estimated time e_t
+
+When the chosen next hop is the destination node itself, e_t is set to 0.0 rather than calling `min_q_value` on the destination. Destination nodes never make routing decisions and are therefore never trained; their Q-values remain random. Using those random values as e_t would corrupt the target `y = c + γ·0` for every last-hop transition. Setting e_t = 0.0 at the destination is correct: no further forwarding cost is incurred once the packet arrives.
 
 ### Max-hops limit
 
