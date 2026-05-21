@@ -205,3 +205,17 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Large data files — traffic matrix archives and preprocessed TM arrays
+*.tgz
+data/*/TrafficMatrix/
+
+# Model checkpoints (large binary blobs)
+checkpoints/*.pt
+checkpoints/ABI/
+checkpoints/GEA/
+checkpoints_delay*/
+
+# Editor / IDE
+.vscode/
+.claude/

@@ -1,0 +1,25 @@
+{
+  "config": {
+    "dr_values": [0.0, 0.2],
+    "train_episodes": 300,
+    "eval_episodes": 50,
+    "n_packets": 100,
+    "seed": 42
+  },
+  "results": {
+    "0.0": {
+      "ospf": {"avg_delivery_time": 4.890, "avg_hops": 3.44, "delivery_rate": 1.0},
+      "per_node":      {"avg_delivery_time": 4.184, "std_delivery_time": 0.0, "train_curve": []},
+      "shared":        {"avg_delivery_time": 4.325, "std_delivery_time": 0.0, "train_curve": []},
+      "attn_per_node": {"avg_delivery_time": 4.133, "std_delivery_time": 0.0, "train_curve": []},
+      "attn_shared":   {"avg_delivery_time": 4.375, "std_delivery_time": 0.0, "train_curve": []}
+    },
+    "0.2": {
+      "ospf": {"avg_delivery_time": 5.143, "avg_hops": 3.74, "delivery_rate": 1.0},
+      "per_node":      {"avg_delivery_time": 4.414, "std_delivery_time": 0.0, "train_curve": []},
+      "shared":        {"avg_delivery_time": 4.599, "std_delivery_time": 0.0, "train_curve": []},
+      "attn_per_node": {"avg_delivery_time": 4.402, "std_delivery_time": 0.0, "train_curve": []},
+      "attn_shared":   {"avg_delivery_time": 4.584, "std_delivery_time": 0.0, "train_curve": []}
+    }
+  }
+}

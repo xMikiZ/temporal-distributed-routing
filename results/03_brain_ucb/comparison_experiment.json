@@ -1,0 +1,132 @@
+{
+  "config": {
+    "dr_values": [
+      0.0,
+      0.2,
+      0.4,
+      0.6,
+      0.8
+    ],
+    "train_episodes": 300,
+    "eval_episodes": 50,
+    "n_packets": 100,
+    "seed": 42
+  },
+  "results": {
+    "0.0": {
+      "ospf": {
+        "avg_delivery_time": 4.1495999999999995,
+        "avg_hops": 1.7904,
+        "delivery_rate": 1.0
+      },
+      "per_node": {
+        "avg_delivery_time": 2.3034,
+        "std_delivery_time": 0.2309684826983976
+      },
+      "shared": {
+        "avg_delivery_time": 2.3308,
+        "std_delivery_time": 0.23460468878519883
+      },
+      "attn_per_node": {
+        "avg_delivery_time": 2.3074,
+        "std_delivery_time": 0.23482597811996866
+      },
+      "attn_shared": {
+        "avg_delivery_time": 2.3242,
+        "std_delivery_time": 0.23900702918533592
+      }
+    },
+    "0.2": {
+      "ospf": {
+        "avg_delivery_time": 2.7452000000000005,
+        "avg_hops": 1.6227999999999998,
+        "delivery_rate": 1.0
+      },
+      "per_node": {
+        "avg_delivery_time": 2.0834,
+        "std_delivery_time": 0.14391122263395587
+      },
+      "shared": {
+        "avg_delivery_time": 2.0934,
+        "std_delivery_time": 0.17204197162320595
+      },
+      "attn_per_node": {
+        "avg_delivery_time": 2.1154,
+        "std_delivery_time": 0.16975523555990843
+      },
+      "attn_shared": {
+        "avg_delivery_time": 2.1244,
+        "std_delivery_time": 0.1797015303218089
+      }
+    },
+    "0.4": {
+      "ospf": {
+        "avg_delivery_time": 3.1694,
+        "avg_hops": 1.4778000000000002,
+        "delivery_rate": 1.0
+      },
+      "per_node": {
+        "avg_delivery_time": 2.153,
+        "std_delivery_time": 0.17442763542512407
+      },
+      "shared": {
+        "avg_delivery_time": 2.1463999999999994,
+        "std_delivery_time": 0.13474063974911207
+      },
+      "attn_per_node": {
+        "avg_delivery_time": 2.1538000000000004,
+        "std_delivery_time": 0.16658799476552927
+      },
+      "attn_shared": {
+        "avg_delivery_time": 2.1715999999999998,
+        "std_delivery_time": 0.17801528024301733
+      }
+    },
+    "0.6": {
+      "ospf": {
+        "avg_delivery_time": 7.0806,
+        "avg_hops": 1.321,
+        "delivery_rate": 1.0
+      },
+      "per_node": {
+        "avg_delivery_time": 2.5198,
+        "std_delivery_time": 0.395304894986136
+      },
+      "shared": {
+        "avg_delivery_time": 2.4440000000000004,
+        "std_delivery_time": 0.25176973606849573
+      },
+      "attn_per_node": {
+        "avg_delivery_time": 2.4974000000000003,
+        "std_delivery_time": 0.3108106175792583
+      },
+      "attn_shared": {
+        "avg_delivery_time": 2.3664,
+        "std_delivery_time": 0.27988397596146875
+      }
+    },
+    "0.8": {
+      "ospf": {
+        "avg_delivery_time": 15.5198,
+        "avg_hops": 1.1614,
+        "delivery_rate": 1.0
+      },
+      "per_node": {
+        "avg_delivery_time": 3.0138,
+        "std_delivery_time": 0.3771731167514461
+      },
+      "shared": {
+        "avg_delivery_time": 3.0581999999999994,
+        "std_delivery_time": 0.4553402683708086
+      },
+      "attn_per_node": {
+        "avg_delivery_time": 3.1062,
+        "std_delivery_time": 0.4172907379753354
+      },
+      "attn_shared": {
+        "avg_delivery_time": 3.1759999999999993,
+        "std_delivery_time": 0.5363319867395567
+      }
+    }
+  }
+}

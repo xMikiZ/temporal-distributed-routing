@@ -15,8 +15,8 @@
   "results": {
     "0.0": {
       "ospf": {
-        "avg_delivery_time": 3.3084,
-        "avg_hops": 2.5228,
+        "avg_delivery_time": 3.3552,
+        "avg_hops": 2.5488,
         "delivery_rate": 1.0
       },
       "per_node": {
@@ -24,14 +24,14 @@
         "std_delivery_time": 0.4214882679268783
       },
       "shared": {
-        "avg_delivery_time": 3.5858,
-        "std_delivery_time": 0.4827839682508109
+        "avg_delivery_time": 3.5928000000000004,
+        "std_delivery_time": 0.4689649880321558
       }
     },
     "0.2": {
       "ospf": {
-        "avg_delivery_time": 2.825,
-        "avg_hops": 2.202,
+        "avg_delivery_time": 2.8638,
+        "avg_hops": 2.1997999999999998,
         "delivery_rate": 1.0
       },
       "per_node": {
@@ -39,14 +39,14 @@
         "std_delivery_time": 0.3606244029457795
       },
       "shared": {
-        "avg_delivery_time": 3.2634,
-        "std_delivery_time": 0.36921868858442153
+        "avg_delivery_time": 3.2604,
+        "std_delivery_time": 0.5432971930720792
       }
     },
     "0.4": {
       "ospf": {
-        "avg_delivery_time": 3.7952,
-        "avg_hops": 1.9212,
+        "avg_delivery_time": 3.6172000000000004,
+        "avg_hops": 1.9185999999999999,
         "delivery_rate": 1.0
       },
       "per_node": {
@@ -54,14 +54,14 @@
         "std_delivery_time": 0.6530586803649424
       },
       "shared": {
-        "avg_delivery_time": 3.5636,
-        "std_delivery_time": 0.5961266979426436
+        "avg_delivery_time": 3.6012,
+        "std_delivery_time": 0.4779817569740502
       }
     },
     "0.6": {
       "ospf": {
-        "avg_delivery_time": 7.488200000000001,
-        "avg_hops": 1.624,
+        "avg_delivery_time": 8.0342,
+        "avg_hops": 1.6168,
         "delivery_rate": 1.0
       },
       "per_node": {
@@ -69,14 +69,14 @@
         "std_delivery_time": 0.9477761128030184
       },
       "shared": {
-        "avg_delivery_time": 4.7764,
-        "std_delivery_time": 0.9358178455233689
+        "avg_delivery_time": 4.692200000000001,
+        "std_delivery_time": 0.8202177515757628
       }
     },
     "0.8": {
       "ospf": {
-        "avg_delivery_time": 16.1772,
-        "avg_hops": 1.311,
+        "avg_delivery_time": 16.339,
+        "avg_hops": 1.305,
         "delivery_rate": 1.0
       },
       "per_node": {
@@ -84,8 +84,8 @@
         "std_delivery_time": 1.5531789851784632
       },
       "shared": {
-        "avg_delivery_time": 6.7542,
-        "std_delivery_time": 1.6393280208670868
+        "avg_delivery_time": 6.489400000000001,
+        "std_delivery_time": 1.2154857629770905
       }
     }
   }

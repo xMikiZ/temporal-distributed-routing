@@ -73,6 +73,9 @@ def parse_args():
                    choices=["epsilon_greedy", "ucb"])
     p.add_argument("--seed",          type=int,   default=42)
     p.add_argument("--log_interval",  type=int,   default=100)
+    p.add_argument("--existing_json", default=None,
+                   help="Path to a partial results JSON to resume from; "
+                        "D_r values already present are skipped.")
     return p.parse_args()
 
 
@@ -289,7 +292,10 @@ def plot_dr_sweep(results: dict, out_path: str) -> None:
 
 
 def plot_training_curves(results: dict, out_path: str) -> None:
-    drs = sorted(results.keys())
+    drs = [d for d in sorted(results.keys())
+           if any(results[d][k].get("train_curve") for k, *_ in VARIANTS)]
+    if not drs:
+        return
     n = len(drs)
     fig, axes = plt.subplots(1, n, figsize=(4 * n, 4), sharey=True)
     fig.suptitle("Training Convergence by D_r", fontsize=13)
@@ -350,6 +356,19 @@ def main() -> None:
     base_cfg.action_method = ACTION_METHOD
 
     all_results: dict = {}
+
+    if args.existing_json and os.path.exists(args.existing_json):
+        with open(args.existing_json) as f:
+            existing = json.load(f)
+        for dr_str, data in existing.get("results", {}).items():
+            dr_val = float(dr_str)
+            dr_data = {"ospf": data["ospf"]}
+            for key, _, _, _ in VARIANTS:
+                v = data.get(key, {})
+                dr_data[key] = {**v, "train_curve": v.get("train_curve", [])}
+            all_results[dr_val] = dr_data
+            print(f"  Loaded existing results for D_r={dr_val}")
+        DR_VALUES = [dr for dr in DR_VALUES if dr not in all_results]
 
     for dr in DR_VALUES:
         print(f"\n{'='*65}")
