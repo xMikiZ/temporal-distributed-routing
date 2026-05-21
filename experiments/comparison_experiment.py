@@ -10,13 +10,27 @@ Variants compared:
 
 Sweeps D_r in [0.0, 0.2, 0.4, 0.6, 0.8] against a queue-simulating OSPF baseline.
 
+Usage
+-----
+  # Default (Abilene):
+  python experiments/comparison_experiment.py
+
+  # Any other topology:
+  python experiments/comparison_experiment.py \\
+      --topo data/BRA/Topology.txt \\
+      --tm_dir data/BRA/TrafficMatrix \\
+      --results results/03_brain_ucb \\
+      --episodes 400 --eval_episodes 100 \\
+      --action_method ucb
+
 Outputs
 -------
-  results/comparison_dr_sweep.png       -- delivery time vs D_r (all variants)
-  results/comparison_gain.png           -- % gain over OSPF vs D_r
-  results/comparison_experiment.json    -- raw numbers
+  <results>/comparison_dr_sweep.png
+  <results>/comparison_training_curves.png
+  <results>/comparison_experiment.json
 """
 
+import argparse
 import heapq
 import json
 import os
@@ -42,7 +56,28 @@ from train import build_agents, build_agents_shared_gnn
 
 
 # ---------------------------------------------------------------------------
-# Config
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args():
+    p = argparse.ArgumentParser(description="ScaIR variants vs OSPF — D_r sweep")
+    p.add_argument("--topo",          default="data/ABI/Topology.txt")
+    p.add_argument("--tm_dir",        default="data/ABI/TrafficMatrix")
+    p.add_argument("--results",       default="results/01_dr_comparison")
+    p.add_argument("--episodes",      type=int,   default=300)
+    p.add_argument("--eval_episodes", type=int,   default=50)
+    p.add_argument("--packets",       type=int,   default=100)
+    p.add_argument("--dr_values",     type=float, nargs="+",
+                   default=[0.0, 0.2, 0.4, 0.6, 0.8])
+    p.add_argument("--action_method", default="epsilon_greedy",
+                   choices=["epsilon_greedy", "ucb"])
+    p.add_argument("--seed",          type=int,   default=42)
+    p.add_argument("--log_interval",  type=int,   default=100)
+    return p.parse_args()
+
+
+# ---------------------------------------------------------------------------
+# Config (filled from args in main())
 # ---------------------------------------------------------------------------
 
 TOPO_FILE      = "data/ABI/Topology.txt"
@@ -55,6 +90,7 @@ TRAIN_EPISODES = 300
 EVAL_EPISODES  = 50
 N_PACKETS      = 100
 LOG_INTERVAL   = 100
+ACTION_METHOD  = "epsilon_greedy"
 
 VARIANTS = [
     ("per_node",        "Per-node SubGNN",    "steelblue",   "o"),
@@ -283,6 +319,22 @@ def plot_training_curves(results: dict, out_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    global TOPO_FILE, TM_DIR, RESULTS, SEED, DR_VALUES, TRAIN_EPISODES, \
+           EVAL_EPISODES, N_PACKETS, LOG_INTERVAL, ACTION_METHOD
+
+    args = parse_args()
+    TOPO_FILE      = args.topo
+    TM_DIR         = args.tm_dir
+    RESULTS        = args.results
+    SEED           = args.seed
+    DR_VALUES      = args.dr_values
+    TRAIN_EPISODES = args.episodes
+    EVAL_EPISODES  = args.eval_episodes
+    N_PACKETS      = args.packets
+    LOG_INTERVAL   = args.log_interval
+    ACTION_METHOD  = args.action_method
+
+    random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(RESULTS, exist_ok=True)
 
     print("Loading topology and traffic matrices...")
@@ -295,6 +347,7 @@ def main() -> None:
     max_deg  = max(len(v) for v in topo.adjacency.values())
     if topo.num_nodes > base_cfg.max_nodes:  base_cfg.max_nodes  = topo.num_nodes
     if max_deg        > base_cfg.max_degree: base_cfg.max_degree = max_deg
+    base_cfg.action_method = ACTION_METHOD
 
     all_results: dict = {}
 
