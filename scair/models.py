@@ -198,6 +198,65 @@ class AttentionSubGNN(SubGNN):
         return self.g_w(V_one_step)
 
 
+class FixedSubGNN(nn.Module):
+    """SubGNN replacement with a constant, non-learned feature vector.
+
+    Replaces the GNN output V_n with a hand-crafted topology encoding so we
+    can ablate whether the GNN is actually useful.  All SubGNN interface
+    methods are preserved but iterate() and reset() are no-ops.
+    """
+
+    def __init__(self, vector: torch.Tensor) -> None:
+        super().__init__()
+        self.feature_length = len(vector)
+        self.f_w = None
+        self.g_w = None
+        self.register_buffer("V", vector.float())
+
+    def iterate(self, neighbour_Vs) -> None:
+        pass
+
+    def get_output(self) -> torch.Tensor:
+        return self.V
+
+    def get_output_trainable(self, neighbour_Vs) -> torch.Tensor:
+        return self.V  # fixed buffer — no grad path through it
+
+    def reset(self) -> None:
+        pass
+
+    def parameters(self, recurse: bool = True):
+        return iter([])  # nothing to train
+
+
+class OneHotSubGNN(FixedSubGNN):
+    """V_n = one-hot at position node_id, zero-padded to feature_length.
+
+    Gives the Q-network a unique but topology-free node identity.
+    Constructor accepts *neighbors* for API symmetry with NeighborMaskSubGNN.
+    """
+
+    def __init__(self, node_id: int, neighbors, feature_length: int) -> None:
+        v = torch.zeros(feature_length)
+        if node_id < feature_length:
+            v[node_id] = 1.0
+        super().__init__(v)
+
+
+class NeighborMaskSubGNN(FixedSubGNN):
+    """V_n = binary mask with 1 at each neighbour's index, 0 elsewhere.
+
+    Encodes immediate topology (degree, neighbour identities) without learning.
+    """
+
+    def __init__(self, node_id: int, neighbors, feature_length: int) -> None:
+        v = torch.zeros(feature_length)
+        for nb in neighbors:
+            if nb < feature_length:
+                v[nb] = 1.0
+        super().__init__(v)
+
+
 class QNetwork(nn.Module):
     """
     Q-Network (N_Q) for a single agent.

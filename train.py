@@ -145,6 +145,66 @@ def build_agents_shared_gnn(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
     return agents
 
 
+def build_agents_no_gnn(topo, cfg: ScaIRConfig, gnn_cls) -> list:
+    """Per-node Q-nets with a fixed (non-trained) feature vector instead of SubGNN.
+
+    gnn_cls must accept (node_id, neighbors, feature_length) — i.e.
+    OneHotSubGNN or NeighborMaskSubGNN.  The fixed GNN is passed as
+    shared_sub_gnn so each agent's optimizer covers only its Q-net.
+    """
+    return [
+        IRrAgent(
+            node_id=n,
+            neighbours=topo.adjacency[n],
+            num_nodes=topo.num_nodes,
+            cfg=cfg,
+            shared_sub_gnn=gnn_cls(n, topo.adjacency[n], cfg.feature_length),
+            shared_gnn_opt=None,
+        )
+        for n in range(topo.num_nodes)
+    ]
+
+
+def build_agents_no_gnn_shared_q(topo, cfg: ScaIRConfig, gnn_cls) -> list:
+    """Shared Q-net with a fixed feature vector — no GNN at all.
+
+    All agents share one QNetwork and one optimizer.  Each agent makes
+    independent gradient updates to the shared Q-net (zero_grad → backward →
+    step per agent per learning_cycle), giving the shared network N× more
+    updates than a per-node Q-net.  This tests whether a single Q-net can
+    generalise across all node positions given only topology-encoded inputs.
+    """
+    from scair.models import QNetwork
+
+    shared_q = QNetwork(
+        max_nodes=cfg.max_nodes,
+        max_degree=cfg.max_degree,
+        feature_length=cfg.feature_length,
+        neural_units=cfg.neural_units,
+        action_history_len=cfg.action_history_len,
+    )
+    shared_target = QNetwork(
+        max_nodes=cfg.max_nodes,
+        max_degree=cfg.max_degree,
+        feature_length=cfg.feature_length,
+        neural_units=cfg.neural_units,
+        action_history_len=cfg.action_history_len,
+    )
+    shared_target.load_state_dict(shared_q.state_dict())
+    for p in shared_target.parameters():
+        p.requires_grad_(False)
+    shared_q_opt = torch.optim.RMSprop(
+        shared_q.parameters(), lr=cfg.learning_rate_initial
+    )
+
+    agents = build_agents_no_gnn(topo, cfg, gnn_cls)
+    for agent in agents:
+        agent.q_net = shared_q
+        agent.q_net_target = shared_target
+        agent.optimizer = shared_q_opt   # all agents share the same optimizer object
+    return agents
+
+
 def save_checkpoint(agents: list, episode: int, save_dir: str) -> None:
     os.makedirs(save_dir, exist_ok=True)
     state = {
