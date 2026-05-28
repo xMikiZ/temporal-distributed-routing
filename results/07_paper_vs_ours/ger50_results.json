@@ -1,0 +1,90 @@
+{
+  "config": {
+    "topology": "germany50",
+    "dr_values": [
+      0.0,
+      0.2,
+      0.4,
+      0.6,
+      0.8
+    ],
+    "paper_train_episodes": 200,
+    "ours_train_episodes": 300,
+    "eval_episodes": 50,
+    "n_packets": 100,
+    "seed": 42,
+    "action_method": "ucb"
+  },
+  "results": {
+    "0.0": {
+      "ospf": {
+        "avg_delivery_time": 4.89
+      },
+      "ours": {
+        "avg_delivery_time": 4.184,
+        "std_delivery_time": 0.0,
+        "note": "from Exp4 per_node UCB, 300 train eps"
+      },
+      "paper": {
+        "avg_delivery_time": 4.602679082854635,
+        "std_delivery_time": 0.5400921888776169
+      }
+    },
+    "0.2": {
+      "ospf": {
+        "avg_delivery_time": 5.143
+      },
+      "ours": {
+        "avg_delivery_time": 4.414,
+        "std_delivery_time": 0.0,
+        "note": "from Exp4 per_node UCB, 300 train eps"
+      },
+      "paper": {
+        "avg_delivery_time": 4.959932074909906,
+        "std_delivery_time": 0.4500795093152804
+      }
+    },
+    "0.4": {
+      "ospf": {
+        "avg_delivery_time": 8.417800000000002
+      },
+      "ours": {
+        "avg_delivery_time": 4.957727325856928,
+        "std_delivery_time": 0.29973332376365597,
+        "note": "from Exp4 per_node UCB, 300 train eps"
+      },
+      "paper": {
+        "avg_delivery_time": 5.376402840151993,
+        "std_delivery_time": 0.5386126248992983
+      }
+    },
+    "0.6": {
+      "ospf": {
+        "avg_delivery_time": 15.215199999999998
+      },
+      "ours": {
+        "avg_delivery_time": 5.439875385880689,
+        "std_delivery_time": 0.36835909296895875,
+        "note": "from Exp4 per_node UCB, 300 train eps"
+      },
+      "paper": {
+        "avg_delivery_time": 5.834360709639441,
+        "std_delivery_time": 0.35479435208012433
+      }
+    },
+    "0.8": {
+      "ospf": {
+        "avg_delivery_time": 28.027
+      },
+      "ours": {
+        "avg_delivery_time": 7.4714917981727185,
+        "std_delivery_time": 0.7057117653304076,
+        "note": "from Exp4 per_node UCB, 300 train eps"
+      },
+      "paper": {
+        "avg_delivery_time": 7.05034346107923,
+        "std_delivery_time": 0.7448812373440199
+      }
+    }
+  }
+}
