@@ -278,7 +278,7 @@ The transfer advantage (1–5%) is small relative to the training curve's range 
 
 ## Experiment 7 — Paper f_w vs Our f_w Formulation
 
-**Setup**: The paper specifies the GNN update as `V_n^(t) = f_w^n({V_y^(t-1) : y ∈ N_n})` without stating the aggregation. Our implementation (`SubGNN`) uses `f_w(concat(V_own, mean(V_nbrs)))` with input dim 2·F_l = 256. This experiment tests the paper-faithful interpretation (`PaperSubGNN`): apply f_w to each neighbour's feature vector individually, then average: `V_n^(t) = mean_y(f_w(V_y^(t-1)))`, with f_w input dim = F_l = 128. Both variants use UCB, per-node weights, g(V_n) fed to the Q-network, on Abilene (11 nodes) and GEANT (23 nodes).
+**Setup**: The paper specifies the GNN update as `V_n^(t) = f_w^n({V_y^(t-1) : y ∈ N_n})` without stating the aggregation. Our implementation (`SubGNN`) uses `f_w(concat(V_own, mean(V_nbrs)))` with input dim 2·F_l = 256. This experiment tests the paper-faithful interpretation (`PaperSubGNN`): apply f_w to each neighbour's feature vector individually, then average: `V_n^(t) = mean_y(f_w(V_y^(t-1)))`, with f_w input dim = F_l = 128. Both variants use UCB, per-node weights, g(V_n) fed to the Q-network, on Abilene (11 nodes), GEANT (23 nodes), and Germany50 (50 nodes). For Germany50, the paper variant was trained for 200 episodes; the "ours" results are taken from Exp 4 (300 episodes, `per_node` UCB).
 
 **Abilene results:**
 
@@ -299,6 +299,18 @@ The transfer advantage (1–5%) is small relative to the training curve's range 
 | 0.4 | 5.127 | 3.229 (+37.0%) | 3.241 (+36.8%) | 0.4% |
 | 0.6 | 11.667 | 4.095 (+64.9%) | 4.005 (+65.7%) | 2.2% |
 | 0.8 | 22.874 | 5.857 (+74.4%) | 5.422 (+76.3%) | 7.5% |
+
+**Germany50 results** (Ours = 300 train eps from Exp 4; Paper = 200 train eps):
+
+| D_r | OSPF (ms) | Ours | Paper | Δ |
+|-----|-----------|------|-------|---|
+| 0.0 | 4.890 | 4.184 (+14.4%) | 4.603 (+5.9%) | 10.1% |
+| 0.2 | 5.143 | 4.414 (+14.2%) | 4.960 (+3.6%) | 12.4% |
+| 0.4 | 8.418 | 4.958 (+41.1%) | 5.376 (+36.1%) | 8.4% |
+| 0.6 | 15.215 | 5.440 (+64.2%) | 5.834 (+61.7%) | 7.2% |
+| 0.8 | 28.027 | 7.471 (+73.3%) | 7.050 (+74.8%) | −5.6% |
+
+Note: the Germany50 gap is larger than on Abilene/GEANT, most likely because "ours" had 100 extra training episodes. At D_r=0.8 the paper variant matches or edges out ours despite fewer episodes, consistent with the Abilene/GEANT pattern at high congestion.
 
 ### Key Findings
 
