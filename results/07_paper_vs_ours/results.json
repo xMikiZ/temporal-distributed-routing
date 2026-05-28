@@ -1,0 +1,152 @@
+{
+  "config": {
+    "dr_values": [
+      0.0,
+      0.2,
+      0.4,
+      0.6,
+      0.8
+    ],
+    "train_episodes": 300,
+    "eval_episodes": 50,
+    "n_packets": 100,
+    "seed": 42,
+    "action_method": "ucb"
+  },
+  "results": {
+    "abilene": {
+      "0.0": {
+        "ospf": {
+          "avg_delivery_time": 3.3724000000000003
+        },
+        "ours": {
+          "avg_delivery_time": 3.1385999999999994,
+          "std_delivery_time": 0.3850403095781012
+        },
+        "paper": {
+          "avg_delivery_time": 3.151,
+          "std_delivery_time": 0.43138961508130896
+        }
+      },
+      "0.2": {
+        "ospf": {
+          "avg_delivery_time": 2.8733999999999993
+        },
+        "ours": {
+          "avg_delivery_time": 2.8648,
+          "std_delivery_time": 0.34870182104485775
+        },
+        "paper": {
+          "avg_delivery_time": 2.8866,
+          "std_delivery_time": 0.3114328820147288
+        }
+      },
+      "0.4": {
+        "ospf": {
+          "avg_delivery_time": 3.7171999999999996
+        },
+        "ours": {
+          "avg_delivery_time": 3.1889999999999996,
+          "std_delivery_time": 0.4776075795043458
+        },
+        "paper": {
+          "avg_delivery_time": 3.1252000000000004,
+          "std_delivery_time": 0.4133629881835093
+        }
+      },
+      "0.6": {
+        "ospf": {
+          "avg_delivery_time": 8.5224
+        },
+        "ours": {
+          "avg_delivery_time": 4.3180000000000005,
+          "std_delivery_time": 0.6136546259908744
+        },
+        "paper": {
+          "avg_delivery_time": 4.2418000000000005,
+          "std_delivery_time": 0.6881647767795152
+        }
+      },
+      "0.8": {
+        "ospf": {
+          "avg_delivery_time": 15.8938
+        },
+        "ours": {
+          "avg_delivery_time": 6.715799999999999,
+          "std_delivery_time": 1.2258941063566626
+        },
+        "paper": {
+          "avg_delivery_time": 6.4506,
+          "std_delivery_time": 1.1822730818216238
+        }
+      }
+    },
+    "geant": {
+      "0.0": {
+        "ospf": {
+          "avg_delivery_time": 2.9190000000000005
+        },
+        "ours": {
+          "avg_delivery_time": 2.7348000000000003,
+          "std_delivery_time": 0.13974605540050136
+        },
+        "paper": {
+          "avg_delivery_time": 2.7209999999999996,
+          "std_delivery_time": 0.13579764357307528
+        }
+      },
+      "0.2": {
+        "ospf": {
+          "avg_delivery_time": 3.0796000000000006
+        },
+        "ours": {
+          "avg_delivery_time": 2.8442000000000003,
+          "std_delivery_time": 0.1313177824972688
+        },
+        "paper": {
+          "avg_delivery_time": 2.8851999999999998,
+          "std_delivery_time": 0.16529053209424913
+        }
+      },
+      "0.4": {
+        "ospf": {
+          "avg_delivery_time": 5.126799999999999
+        },
+        "ours": {
+          "avg_delivery_time": 3.2294,
+          "std_delivery_time": 0.18910748266528218
+        },
+        "paper": {
+          "avg_delivery_time": 3.2414000000000005,
+          "std_delivery_time": 0.21858645886696645
+        }
+      },
+      "0.6": {
+        "ospf": {
+          "avg_delivery_time": 11.667199999999998
+        },
+        "ours": {
+          "avg_delivery_time": 4.0952,
+          "std_delivery_time": 0.5535783232750358
+        },
+        "paper": {
+          "avg_delivery_time": 4.005,
+          "std_delivery_time": 0.26112257658042515
+        }
+      },
+      "0.8": {
+        "ospf": {
+          "avg_delivery_time": 22.8736
+        },
+        "ours": {
+          "avg_delivery_time": 5.856959595959595,
+          "std_delivery_time": 0.921902304639744
+        },
+        "paper": {
+          "avg_delivery_time": 5.421799999999999,
+          "std_delivery_time": 1.0479879579460825
+        }
+      }
+    }
+  }
+}

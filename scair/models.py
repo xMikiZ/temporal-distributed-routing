@@ -198,6 +198,51 @@ class AttentionSubGNN(SubGNN):
         return self.g_w(V_one_step)
 
 
+class PaperSubGNN(SubGNN):
+    """
+    Paper-faithful SubGNN: f_w is applied to each neighbour's V individually,
+    then the outputs are averaged to form the new V_n.
+
+    Paper Eq. 2:  V_n^(t) = f_w^n( {V_y^(t-1) : y in N_n} )
+
+    Interpreted as:  V_n^(t) = mean_y( f_w(V_y^(t-1)) )   -- f_w input dim = F_l
+
+    Our default SubGNN instead uses f_w( concat(V_own, mean(V_nbrs)) ) with
+    input dim = 2 * F_l, which always preserves node identity explicitly.
+    """
+
+    def __init__(
+        self,
+        node_id: int,
+        num_nodes: int,
+        feature_length: int,
+        neural_units: int,
+    ) -> None:
+        super().__init__(node_id, num_nodes, feature_length, neural_units)
+        # Override f_w: input is a single neighbour FV [F_l], not concat [2 * F_l]
+        self.f_w = nn.Sequential(
+            nn.Linear(feature_length, neural_units),
+            nn.ReLU(),
+            nn.Linear(neural_units, feature_length),
+        )
+
+    def iterate(self, neighbour_Vs: List[torch.Tensor]) -> None:
+        with torch.no_grad():
+            if neighbour_Vs:
+                transformed = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+                self.V = transformed.mean(dim=0).detach()
+            else:
+                self.V = torch.zeros(self.feature_length, device=self.V.device)
+
+    def get_output_trainable(self, neighbour_Vs: List[torch.Tensor]) -> torch.Tensor:
+        if neighbour_Vs:
+            transformed = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+            V_new = transformed.mean(dim=0)   # grad flows through f_w to each neighbour
+        else:
+            V_new = torch.zeros(self.feature_length, device=self.V.device)
+        return self.g_w(V_new)
+
+
 class FixedSubGNN(nn.Module):
     """SubGNN replacement with a constant, non-learned feature vector.
 

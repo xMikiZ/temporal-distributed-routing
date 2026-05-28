@@ -1,0 +1,19 @@
+{
+  "source_checkpoint": "checkpoints/abi_ucb/episode_0300.pt",
+  "source_node": 0,
+  "episodes": 200,
+  "results": {
+    "0.0": {
+      "eval_fresh": 4.508724931197096,
+      "eval_transfer": 4.440270945038434
+    },
+    "0.4": {
+      "eval_fresh": 5.33573031594081,
+      "eval_transfer": 5.075006285557023
+    },
+    "0.8": {
+      "eval_fresh": 6.984128561129835,
+      "eval_transfer": 6.868497956023856
+    }
+  }
+}

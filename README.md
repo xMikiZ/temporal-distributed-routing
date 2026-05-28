@@ -36,8 +36,10 @@ The paper proposes a distributed routing algorithm where each router:
 This implementation replaces the OMNet++ C++ simulation platform used in the paper with a self-contained Python event-driven simulator, making the code easy to run without external network simulation software.
 
 Currently supported topologies:
-- **Abilene** (11 nodes, 14 bidirectional links)
-- **GEANT** (23 nodes, 37 bidirectional links)
+- **Abilene** (11 nodes, 14 bidirectional links) — Internet2 backbone, real TMs
+- **GEANT** (23 nodes, 37 bidirectional links) — European research network, real TMs
+- **BRAIN** (9 nodes, aggregated Berlin backbone) — SNDlib dataset, real 1-min TMs
+- **Germany50** (50 nodes, 88 bidirectional links) — DFN backbone, real 5-min TMs
 
 ---
 
@@ -52,17 +54,19 @@ temporal-distributed-routing/
 │   ├── config.py         # ScaIRConfig dataclass (all hyperparameters)
 │   ├── agent.py          # IRrAgent: sub-GNN + Q-network per router
 │   ├── environment.py    # Event-driven packet routing simulator
-│   ├── models.py         # SubGNN and QNetwork PyTorch modules
+│   ├── models.py         # SubGNN, PaperSubGNN, AttentionSubGNN, QNetwork, etc.
 │   └── data_loader.py    # Topology and traffic matrix loaders
+├── experiments/
+│   ├── comparison_experiment.py      # Exp 1/3/4 — D_r sweep (reusable across topos)
+│   ├── topology_robustness_variants.py # Exp 2 — topology mutation robustness
+│   ├── ablation_no_gnn.py            # Exp 5 — no-GNN fixed-encoding ablation
+│   ├── transfer_experiment.py        # Exp 6 — transfer learning across topologies
+│   └── paper_vs_ours_experiment.py   # Exp 7 — paper f_w vs our f_w formulation
 └── data/
-    ├── ABI/              # Abilene topology and traffic matrices
-    │   ├── Topology.txt
-    │   ├── TrafficMatrix/
-    │   └── link_weight.json
-    └── GEA/              # GEANT topology and traffic matrices
-        ├── Topology.txt
-        ├── TrafficMatrix/
-        └── link_weight.json
+    ├── ABI/              # Abilene (11 nodes)
+    ├── GEA/              # GEANT (23 nodes)
+    ├── BRA/              # BRAIN Berlin backbone (9 nodes, aggregated)
+    └── GER50/            # Germany50 DFN backbone (50 nodes)
 ```
 
 ---
@@ -259,54 +263,73 @@ The `ScaIRConfig` dataclass in [scair/config.py](scair/config.py) exposes all hy
 
 ## Experiments
 
-Two validation experiments are provided in `experiments/`. Run both sequentially:
+Seven experiments are provided in `experiments/`. See [`results/CONCLUSIONS.md`](results/CONCLUSIONS.md) for full quantitative results and scientific analysis.
 
-```bash
-bash experiments/run_all_experiments.sh
-```
+### Experiment 1 — D_r Sweep on Abilene (`experiments/comparison_experiment.py`)
 
-Or individually:
+Compares four ScaIR variants (per-node/shared × mean/attention) against OSPF across D_r ∈ {0.0, 0.2, 0.4, 0.6, 0.8} using ε-greedy exploration.
 
-```bash
-python experiments/comparison_experiment.py       # ~15 min
-python experiments/topology_robustness_variants.py  # ~2 hrs
-```
-
-### Experiment 1 — D_r Sweep (`experiments/comparison_experiment.py`)
-
-Compares all four ScaIR variants against a queue-simulating OSPF baseline across five hot-spot ratios D_r ∈ {0.0, 0.2, 0.4, 0.6, 0.8}. All variants are trained from scratch (300 episodes) and evaluated (50 episodes) at each D_r.
-
-**Variants tested:**
-- **Per-node SubGNN** — independent SubGNN per router, mean aggregation
-- **Shared SubGNN** — all routers share f_w/g_w weights (per-node V state), mean aggregation
-- **Per-node Attention** — independent SubGNN per router, dot-product attention aggregation
-- **Shared Attention** — shared weights with attention aggregation
-
-**Key result:** ScaIR outperforms OSPF by 35–57% at D_r ≥ 0.6; OSPF is slightly better at D_r ≤ 0.2. All variants perform nearly identically.
-
-Outputs: `results/01_dr_comparison/`
+**Key result:** +35–57% over OSPF at D_r ≥ 0.6; all four variants are statistically indistinguishable. Outputs: `results/01_dr_comparison/`
 
 ### Experiment 2 — Topology Robustness (`experiments/topology_robustness_variants.py`)
 
-Tests all four variants under four topology mutations (add node, remove link, add link, remove node) using a 4-phase A→B→C→D protocol. Phase B measures immediate degradation; Phase D measures post-adaptation recovery.
+Tests all four variants under four topology mutations (add node, remove link, add link, remove node) using a 4-phase A→B→C→D protocol.
 
-Outputs: `results/02_topology_robustness/`
+**Key result:** Link mutations cause <4% immediate degradation and are fully recovered after 200 adaptation episodes. Node addition is the hardest mutation (+60–70% immediate degradation, partial recovery). Outputs: `results/02_topology_robustness/`
 
-### Results and Conclusions
+### Experiments 3 & 4 — BRAIN and Germany50 (`experiments/comparison_experiment.py`)
 
-Full quantitative results and scientific conclusions are in [`results/CONCLUSIONS.md`](results/CONCLUSIONS.md).
+Same D_r sweep with **UCB exploration** on BRAIN (9 nodes) and Germany50 (50 nodes).
+
+```bash
+python experiments/comparison_experiment.py \
+    --topo data/BRA/Topology.txt --tm_dir data/BRA/TrafficMatrix \
+    --results results/03_brain_ucb --action_method ucb
+
+python experiments/comparison_experiment.py \
+    --topo data/GER50/Topology.txt --tm_dir data/GER50/TrafficMatrix \
+    --results results/04_germany50_ucb --action_method ucb
+```
+
+**Key result:** ScaIR beats OSPF at every D_r on both topologies (no crossover, unlike Abilene). Germany50 shows a first clear variant ordering: attention per-node leads at high D_r by ~10%. Outputs: `results/03_brain_ucb/`, `results/04_germany50_ucb/`
+
+### Experiment 5 — No-GNN Ablation (`experiments/ablation_no_gnn.py`)
+
+Replaces the trained SubGNN with fixed (non-learned) feature vectors — one-hot node ID or binary neighbour mask — and compares against full ScaIR. Tests both per-node and shared Q-network configurations. Run on BRAIN, Abilene, and Germany50 with UCB.
+
+**Key result:** Fixed encodings match or outperform the learned GNN within a 300-episode budget on all three topologies. On Germany50, no-GNN variants beat ScaIR-with-GNN by 5–9%. The multi-agent DQN with local observations (not the GNN) is the primary driver of performance. Outputs: `results/05_no_gnn_{bra,abi,ger50}/`
+
+### Experiment 6 — Transfer Learning (`experiments/transfer_experiment.py`)
+
+Copies the trained weights from one Abilene UCB agent (node 0) to all 50 Germany50 agents and fine-tunes for 200 episodes. The Q-network first layer is zero-padded from 218→238 input dimensions, preserving the semantic block structure (destination, queues, GNN feature, action history).
+
+**Key result:** Transfer provides a marginal but consistent head start (1–5% improvement over training from scratch at 200 episodes), suggesting Abilene's routing policy partially generalises across topologies. Outputs: `results/06_transfer/`
+
+### Experiment 7 — Paper f_w vs Our f_w (`experiments/paper_vs_ours_experiment.py`)
+
+Compares the paper's formulation of the GNN update step against our implementation:
+
+- **Paper**: `V_n^(t) = mean_y( f_w(V_y^(t-1)) )` — f_w applied per-neighbour, then averaged; input dim = F_l
+- **Ours**: `V_n^(t) = f_w( concat(V_own, mean(V_nbrs)) )` — own state explicitly included; input dim = 2·F_l
+
+Both run on Abilene and GEANT with UCB, per-node weights, g(V_n) fed to the Q-network.
+
+**Key result:** The two formulations are statistically indistinguishable across all D_r values on both topologies (differences < 2%). Including V_own in f_w's input provides no measurable benefit. Outputs: `results/07_paper_vs_ours/`
+
+### Results summary
 
 ```
 results/
-├── CONCLUSIONS.md                  # Scientific conclusions from all experiments
-├── 01_dr_comparison/
-│   ├── comparison_dr_sweep.png     # Delivery time vs D_r (all variants)
-│   ├── comparison_training_curves.png
-│   └── comparison_experiment.json
-└── 02_topology_robustness/
-    ├── robustness_summary.png      # Phase A/B/D bar chart per mutation
-    ├── adaptation_curves.png       # Online adaptation training curves
-    └── robustness_results.json
+├── CONCLUSIONS.md
+├── 01_dr_comparison/      # Exp 1 — Abilene ε-greedy, 4 variants
+├── 02_topology_robustness/ # Exp 2 — Abilene topology mutations
+├── 03_brain_ucb/          # Exp 3 — BRAIN UCB, 4 variants
+├── 04_germany50_ucb/      # Exp 4 — Germany50 UCB, 4 variants
+├── 05_no_gnn_bra/         # Exp 5a — BRAIN no-GNN ablation
+├── 05_no_gnn_abi/         # Exp 5b — Abilene no-GNN ablation
+├── 05_no_gnn_ger50/       # Exp 5c — Germany50 no-GNN ablation
+├── 06_transfer/           # Exp 6 — Abilene → Germany50 transfer
+└── 07_paper_vs_ours/      # Exp 7 — Paper f_w vs our f_w (Abilene + GEANT)
 ```
 
 ---
@@ -321,7 +344,7 @@ The paper uses OMNet++ for simulation. This implementation uses a self-contained
 
 ### GNN message-passing aggregation
 
-The paper defines the update function f_w({V_y | y ∈ N_n}) (Eq. 2) but does not specify the aggregation operation over the neighbour set. This implementation concatenates the agent's own current feature vector with the **mean** of its neighbours' feature vectors, giving a 2·F_l input to f_w. Mean aggregation handles variable-degree nodes without padding and is standard in GCN literature.
+The paper defines the update `V_n^(t) = f_w^n({V_y^(t-1) : y ∈ N_n})` (Eq. 2) but does not specify the aggregation over the neighbour set. This implementation (`SubGNN`) concatenates the agent's own current feature vector with the **mean** of its neighbours' feature vectors, giving a 2·F_l input to f_w. A paper-faithful alternative (`PaperSubGNN`) applies f_w to each neighbour's feature vector individually and then averages the outputs: `V_n^(t) = mean_y(f_w(V_y^(t-1)))`, with f_w input dim = F_l. Experiment 7 shows the two formulations perform identically in practice.
 
 ### Sub-GNN architecture
 

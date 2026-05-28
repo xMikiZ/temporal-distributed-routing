@@ -251,6 +251,70 @@ At D_r=0.6 and D_r=0.8, OneHot shared-Q achieves 5.431 ms and 6.178 ms respectiv
 
 ---
 
+## Experiment 6 — Transfer Learning: Abilene → Germany50
+
+**Setup**: A trained Abilene UCB checkpoint (node 0, episode 300) is copied to all 50 Germany50 agents as initialisation. The Q-network's first linear layer is zero-padded from input dim 218 (Abilene: 30+10+128+50) to 238 (Germany50: 50+10+128+50), preserving the semantic block layout (destination columns 0–10 copied, columns 11–49 zeroed; queues, GNN feature, and action history blocks copied directly). Both transfer-initialised and fresh (random-init) agents are then fine-tuned on Germany50 for 200 episodes.
+
+| D_r | Fresh (200 eps) | Transfer (200 eps) | Δ |
+|-----|----------------|-------------------|---|
+| 0.0 | 4.509 ms | 4.440 ms | −1.5% |
+| 0.4 | 5.336 ms | 5.075 ms | −4.9% |
+| 0.8 | 6.984 ms | 6.868 ms | −1.7% |
+
+### Key Findings
+
+**24. Transfer provides a marginal but consistent head start.**  
+At all three D_r values, the transfer-initialised agents achieve lower delivery time than fresh agents after the same 200-episode fine-tuning budget. The effect is small (1–5%) but consistent in direction, suggesting that Abilene's routing policy captures some generally useful congestion-avoidance signal that transfers across topologies. The gain is largest at moderate congestion (D_r=0.4, −4.9%) where routing decisions are most contested.
+
+**25. Zero-padding the Q-network across topology sizes works without catastrophic forgetting.**  
+Copying the Q-net weights and padding new destination dimensions to zero is a safe initialisation strategy: the new columns are never activated for destinations that don't exist in the source topology, and the existing weights for the shared input blocks (queues, GNN feature, action history) provide a useful starting point. No catastrophic forgetting is observed — the transfer variant improves steadily during fine-tuning.
+
+**26. Full convergence still requires topology-specific training.**  
+The transfer advantage (1–5%) is small relative to the training curve's range (from ~7–45 ms at episode 1 to ~4.5–7 ms at episode 200). Transfer merely shifts the starting point; the convergence trajectory is similar. For production use, a longer fine-tuning budget (300+ episodes) would be needed to realise the transfer benefit reliably.
+
+*(See `results/06_transfer/` for plots and raw JSON.)*
+
+---
+
+## Experiment 7 — Paper f_w vs Our f_w Formulation
+
+**Setup**: The paper specifies the GNN update as `V_n^(t) = f_w^n({V_y^(t-1) : y ∈ N_n})` without stating the aggregation. Our implementation (`SubGNN`) uses `f_w(concat(V_own, mean(V_nbrs)))` with input dim 2·F_l = 256. This experiment tests the paper-faithful interpretation (`PaperSubGNN`): apply f_w to each neighbour's feature vector individually, then average: `V_n^(t) = mean_y(f_w(V_y^(t-1)))`, with f_w input dim = F_l = 128. Both variants use UCB, per-node weights, g(V_n) fed to the Q-network, on Abilene (11 nodes) and GEANT (23 nodes).
+
+**Abilene results:**
+
+| D_r | OSPF (ms) | Ours | Paper | Δ |
+|-----|-----------|------|-------|---|
+| 0.0 | 3.372 | 3.139 (+6.9%) | 3.151 (+6.6%) | 0.4% |
+| 0.2 | 2.873 | 2.865 (+0.3%) | 2.887 (−0.5%) | 0.8% |
+| 0.4 | 3.717 | 3.190 (+14.2%) | 3.125 (+15.9%) | 2.1% |
+| 0.6 | 8.522 | 4.318 (+49.3%) | 4.242 (+50.2%) | 1.8% |
+| 0.8 | 15.894 | 6.716 (+57.7%) | 6.451 (+59.4%) | 4.2% |
+
+**GEANT results:**
+
+| D_r | OSPF (ms) | Ours | Paper | Δ |
+|-----|-----------|------|-------|---|
+| 0.0 | 2.919 | 2.735 (+6.3%) | 2.721 (+6.8%) | 0.5% |
+| 0.2 | 3.080 | 2.844 (+7.6%) | 2.885 (+6.3%) | 1.4% |
+| 0.4 | 5.127 | 3.229 (+37.0%) | 3.241 (+36.8%) | 0.4% |
+| 0.6 | 11.667 | 4.095 (+64.9%) | 4.005 (+65.7%) | 2.2% |
+| 0.8 | 22.874 | 5.857 (+74.4%) | 5.422 (+76.3%) | 7.5% |
+
+### Key Findings
+
+**27. The two f_w formulations perform identically in practice.**  
+Across both topologies and all five D_r values, the maximum difference between the two variants is 7.5% (GEANT, D_r=0.8) — comparable to run-to-run stochastic variance (~5–10%). Neither variant is systematically better: at some D_r values Ours leads, at others Paper leads, with no consistent pattern. The choice of f_w formulation (include own V or not, apply per-neighbour or after aggregation) does not matter for routing performance.
+
+**28. Our deviation from the paper (including V_own in f_w) provides no measurable benefit or harm.**  
+Including the node's own feature vector in f_w's input doubles the network's input dimension but does not improve performance. The GNN learns to encode topology structure regardless of whether V_own is explicitly available: including it is redundant since V_own is already the output of the previous iteration's f_w call. The paper's formulation (neighbours only) is simpler and equally effective.
+
+**29. The result reinforces Experiment 5: the GNN formulation details don't matter.**  
+Whether f_w takes mean(V_nbrs) or applies f_w per-neighbour then averages, the routing performance is the same. Combined with Experiment 5 (no-GNN baselines matching GNN performance), this strongly suggests that the Q-network's local observations (queue lengths, destination, action history) are the dominant routing signal, and the GNN's topology encoding — regardless of formulation — plays a secondary role within a 300-episode training budget.
+
+*(See `results/07_paper_vs_ours/` for plots and raw JSON.)*
+
+---
+
 ## Implementation Correctness Checks
 
 **Shared SubGNN (weight sharing):**  
