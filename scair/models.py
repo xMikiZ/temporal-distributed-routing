@@ -19,10 +19,11 @@ Aggregation variants:
   No learnable weight matrices in the attention — pure dot-product similarity.
 """
 
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List
+from typing import Dict, List, Optional
 
 
 class SubGNN(nn.Module):
@@ -198,17 +199,28 @@ class AttentionSubGNN(SubGNN):
         return self.g_w(V_one_step)
 
 
+def _make_init_v(node_id: int, feature_length: int,
+                 init_v: Optional[torch.Tensor]) -> torch.Tensor:
+    """Return V_init: either the supplied vector (zero-padded) or one-hot."""
+    if init_v is not None:
+        v = torch.zeros(feature_length)
+        n = min(len(init_v), feature_length)
+        v[:n] = init_v[:n].float()
+        return v
+    v = torch.zeros(feature_length)
+    if node_id < feature_length:
+        v[node_id] = 1.0
+    return v
+
+
 class PaperSubGNN(SubGNN):
     """
     Paper-faithful SubGNN: f_w is applied to each neighbour's V individually,
     then the outputs are averaged to form the new V_n.
 
-    Paper Eq. 2:  V_n^(t) = f_w^n( {V_y^(t-1) : y in N_n} )
+    V_n^(t) = mean_y( f_w(V_y^(t-1)) )   -- f_w input dim = F_l
 
-    Interpreted as:  V_n^(t) = mean_y( f_w(V_y^(t-1)) )   -- f_w input dim = F_l
-
-    Our default SubGNN instead uses f_w( concat(V_own, mean(V_nbrs)) ) with
-    input dim = 2 * F_l, which always preserves node identity explicitly.
+    Accepts optional init_v to override the default one-hot initialisation.
     """
 
     def __init__(
@@ -217,14 +229,16 @@ class PaperSubGNN(SubGNN):
         num_nodes: int,
         feature_length: int,
         neural_units: int,
+        init_v: Optional[torch.Tensor] = None,
     ) -> None:
         super().__init__(node_id, num_nodes, feature_length, neural_units)
-        # Override f_w: input is a single neighbour FV [F_l], not concat [2 * F_l]
         self.f_w = nn.Sequential(
             nn.Linear(feature_length, neural_units),
             nn.ReLU(),
             nn.Linear(neural_units, feature_length),
         )
+        self._V_init = _make_init_v(node_id, feature_length, init_v)
+        self.register_buffer("V", self._V_init.clone())
 
     def iterate(self, neighbour_Vs: List[torch.Tensor]) -> None:
         with torch.no_grad():
@@ -237,9 +251,106 @@ class PaperSubGNN(SubGNN):
     def get_output_trainable(self, neighbour_Vs: List[torch.Tensor]) -> torch.Tensor:
         if neighbour_Vs:
             transformed = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
-            V_new = transformed.mean(dim=0)   # grad flows through f_w to each neighbour
+            V_new = transformed.mean(dim=0)
         else:
             V_new = torch.zeros(self.feature_length, device=self.V.device)
+        return self.g_w(V_new)
+
+    def reset(self) -> None:
+        self.V = self._V_init.clone().to(self.V.device)
+
+
+class DotAttnSubGNN(PaperSubGNN):
+    """
+    GNN with scaled dot-product attention aggregation.
+
+    score_y  = (V_n · f_w(V_y)) / sqrt(F_l)
+    weights  = softmax(scores)
+    V_n^new  = sum_y( weights_y * f_w(V_y) )
+
+    No learnable attention parameters — attention derives from current V state.
+    Accepts optional init_v for custom initialisation.
+    """
+
+    def iterate(self, neighbour_Vs: List[torch.Tensor]) -> None:
+        with torch.no_grad():
+            if not neighbour_Vs:
+                self.V = torch.zeros(self.feature_length, device=self.V.device)
+                return
+            transformed = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+            if len(neighbour_Vs) == 1:
+                self.V = transformed[0].detach()
+                return
+            scores = (transformed * self.V.unsqueeze(0)).sum(-1) / math.sqrt(self.feature_length)
+            weights = torch.softmax(scores, dim=0)
+            self.V = (weights.unsqueeze(-1) * transformed).sum(0).detach()
+
+    def get_output_trainable(self, neighbour_Vs: List[torch.Tensor]) -> torch.Tensor:
+        if not neighbour_Vs:
+            return self.g_w(torch.zeros(self.feature_length, device=self.V.device))
+        t_for_scores = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs]).detach()
+        if len(neighbour_Vs) == 1:
+            return self.g_w(self.f_w(neighbour_Vs[0].detach()))
+        scores = (t_for_scores * self.V.detach().unsqueeze(0)).sum(-1) / math.sqrt(self.feature_length)
+        weights = torch.softmax(scores, dim=0).detach()
+        t_grad = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+        V_new = (weights.unsqueeze(-1) * t_grad).sum(0)
+        return self.g_w(V_new)
+
+
+class LearnableAttnSubGNN(PaperSubGNN):
+    """
+    GNN with learnable query-projection attention.
+
+    q        = W_q * V_n                        (learnable W_q)
+    score_y  = (q · f_w(V_y)) / sqrt(F_l)
+    weights  = softmax(scores)
+    V_n^new  = sum_y( weights_y * f_w(V_y) )
+
+    Accepts optional init_v for custom initialisation.
+    """
+
+    def __init__(
+        self,
+        node_id: int,
+        num_nodes: int,
+        feature_length: int,
+        neural_units: int,
+        init_v: Optional[torch.Tensor] = None,
+    ) -> None:
+        super().__init__(node_id, num_nodes, feature_length, neural_units, init_v=init_v)
+        self.W_q = nn.Linear(feature_length, feature_length, bias=False)
+
+    def _attention_weights(self, transformed: torch.Tensor,
+                           v_query: torch.Tensor) -> torch.Tensor:
+        q = self.W_q(v_query)
+        scores = (transformed * q.unsqueeze(0)).sum(-1) / math.sqrt(self.feature_length)
+        return torch.softmax(scores, dim=0)
+
+    def iterate(self, neighbour_Vs: List[torch.Tensor]) -> None:
+        with torch.no_grad():
+            if not neighbour_Vs:
+                self.V = torch.zeros(self.feature_length, device=self.V.device)
+                return
+            transformed = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+            if len(neighbour_Vs) == 1:
+                self.V = transformed[0].detach()
+                return
+            weights = self._attention_weights(transformed, self.V)
+            self.V = (weights.unsqueeze(-1) * transformed).sum(0).detach()
+
+    def get_output_trainable(self, neighbour_Vs: List[torch.Tensor]) -> torch.Tensor:
+        if not neighbour_Vs:
+            return self.g_w(torch.zeros(self.feature_length, device=self.V.device))
+        if len(neighbour_Vs) == 1:
+            return self.g_w(self.f_w(neighbour_Vs[0].detach()))
+        # Score with detached f_w outputs; W_q retains grad
+        t_for_scores = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs]).detach()
+        q = self.W_q(self.V.detach())           # grad flows through W_q
+        scores = (t_for_scores * q.unsqueeze(0)).sum(-1) / math.sqrt(self.feature_length)
+        weights = torch.softmax(scores, dim=0)  # grad through W_q
+        t_grad = torch.stack([self.f_w(v.detach()) for v in neighbour_Vs])
+        V_new = (weights.unsqueeze(-1) * t_grad).sum(0)
         return self.g_w(V_new)
 
 
@@ -300,6 +411,22 @@ class NeighborMaskSubGNN(FixedSubGNN):
             if nb < feature_length:
                 v[nb] = 1.0
         super().__init__(v)
+
+
+def make_fixed_gnn(init_vs: Dict[int, torch.Tensor]):
+    """Factory: returns a FixedSubGNN class whose V is taken from init_vs[node_id].
+
+    The returned class has the same constructor signature as OneHotSubGNN /
+    NeighborMaskSubGNN, so it works with build_agents_no_gnn.
+    """
+    class _TopoFixed(FixedSubGNN):
+        def __init__(self, node_id: int, neighbors, feature_length: int) -> None:
+            iv = init_vs[node_id]
+            v = torch.zeros(feature_length)
+            n = min(len(iv), feature_length)
+            v[:n] = iv[:n].float()
+            super().__init__(v)
+    return _TopoFixed
 
 
 class QNetwork(nn.Module):

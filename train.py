@@ -109,6 +109,35 @@ def build_agents(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
     ]
 
 
+def build_agents_topo_init(topo, cfg: ScaIRConfig, gnn_cls, init_vs: dict) -> list:
+    """Per-node GNN agents with topology-derived V initialisation.
+
+    init_vs: dict {node_id: torch.Tensor} — one init vector per node.
+    gnn_cls must accept init_v keyword (PaperSubGNN, DotAttnSubGNN, LearnableAttnSubGNN).
+    """
+    return [
+        IRrAgent(
+            node_id=n,
+            neighbours=topo.adjacency[n],
+            num_nodes=topo.num_nodes,
+            cfg=cfg,
+            gnn_cls=gnn_cls,
+            init_v=init_vs[n],
+        )
+        for n in range(topo.num_nodes)
+    ]
+
+
+def build_agents_fixed_topo(topo, cfg: ScaIRConfig, init_vs: dict) -> list:
+    """Fixed (no-GNN) agents with topology-derived constant feature vectors.
+
+    init_vs: dict {node_id: torch.Tensor}.
+    """
+    from scair.models import make_fixed_gnn
+    cls = make_fixed_gnn(init_vs)
+    return build_agents_no_gnn(topo, cfg, cls)
+
+
 def build_agents_shared_gnn(topo, cfg: ScaIRConfig, gnn_cls=None) -> list:
     """All agents share f_w / g_w weights but each keeps its own V state.
 

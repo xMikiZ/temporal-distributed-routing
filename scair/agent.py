@@ -94,6 +94,7 @@ class IRrAgent:
         shared_sub_gnn: Optional["SubGNN"] = None,
         shared_gnn_opt: Optional[torch.optim.Optimizer] = None,
         gnn_cls=None,
+        init_v=None,
     ) -> None:
         self.node_id = node_id
         self.neighbours = neighbours          # ordered list of neighbour node IDs
@@ -110,7 +111,10 @@ class IRrAgent:
             self.sub_gnn = shared_sub_gnn
         else:
             cls = gnn_cls if gnn_cls is not None else SubGNN
-            self.sub_gnn = cls(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
+            if init_v is not None:
+                self.sub_gnn = cls(node_id, num_nodes, cfg.feature_length, cfg.neural_units, init_v=init_v)
+            else:
+                self.sub_gnn = cls(node_id, num_nodes, cfg.feature_length, cfg.neural_units)
 
         self.q_net = QNetwork(
             max_nodes=cfg.max_nodes,
