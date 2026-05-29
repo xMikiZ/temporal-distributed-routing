@@ -1,0 +1,82 @@
+{
+  "Add node 11 (->0, ->8)": {
+    "scair": {
+      "zero_shot": 7.769,
+      "after_adapt": 4.238
+    },
+    "deg_mean": {
+      "zero_shot": 297.242,
+      "after_adapt": 4.392
+    },
+    "deg_dot": {
+      "zero_shot": 9.156,
+      "after_adapt": 4.38
+    },
+    "deg_lattn": {
+      "zero_shot": 5.574,
+      "after_adapt": 5.833
+    },
+    "bet_mean": {
+      "zero_shot": 162.666,
+      "after_adapt": 4.313
+    },
+    "bet_dot": {
+      "zero_shot": 185.048,
+      "after_adapt": 8.805
+    },
+    "bet_lattn": {
+      "zero_shot": 6.786,
+      "after_adapt": 4.044
+    },
+    "deg_fixed": {
+      "zero_shot": 14.598,
+      "after_adapt": 4.688
+    },
+    "bet_fixed": {
+      "zero_shot": 8.324,
+      "after_adapt": 4.094
+    },
+    "ospf_before": 7.315,
+    "ospf_after": 8.094
+  },
+  "Remove link 3-6": {
+    "scair": {
+      "zero_shot": 4.682,
+      "after_adapt": 4.417
+    },
+    "deg_mean": {
+      "zero_shot": 4.618,
+      "after_adapt": 4.577
+    },
+    "deg_dot": {
+      "zero_shot": 4.519,
+      "after_adapt": 4.61
+    },
+    "deg_lattn": {
+      "zero_shot": 4.51,
+      "after_adapt": 4.439
+    },
+    "bet_mean": {
+      "zero_shot": 4.177,
+      "after_adapt": 4.61
+    },
+    "bet_dot": {
+      "zero_shot": 4.449,
+      "after_adapt": 4.4
+    },
+    "bet_lattn": {
+      "zero_shot": 4.916,
+      "after_adapt": 4.5
+    },
+    "deg_fixed": {
+      "zero_shot": 4.504,
+      "after_adapt": 4.67
+    },
+    "bet_fixed": {
+      "zero_shot": 4.661,
+      "after_adapt": 4.691
+    },
+    "ospf_before": 7.315,
+    "ospf_after": 7.599
+  }
+}

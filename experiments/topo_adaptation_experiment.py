@@ -1,15 +1,24 @@
 #!/usr/bin/env python3
 """
-Topology Adaptation Test (Abilene, D_r=0.6) — standalone follow-up to Exp 9.
+Experiment 9b: 9-variant DR sweep on BRAIN + Germany50, then Abilene adaptation.
 
-Trains all 13 Exp-9 variants on Abilene with D_r=0.6 (200 episodes),
-then tests zero-shot performance and short-term adaptation (50 episodes)
-under two topology changes:
+Variants (no shortest-path):
+  scair, deg_mean, deg_dot, deg_lattn,
+  bet_mean, bet_dot, bet_lattn,
+  deg_fixed, bet_fixed
+
+Part 1 — DR sweep on BRAIN and Germany50 (D_r = 0.0, 0.4, 0.8)
+Part 2 — Topology adaptation on Abilene (D_r = 0.6):
   A) Add node 11 connected to nodes 0 and 8
   B) Remove link 3-6
+  Zero-shot eval + 50 online adaptation episodes.
 
 Outputs
 -------
+  results/09_topo_init/brain_results_9v.json
+  results/09_topo_init/brain_dr_sweep_9v.png
+  results/09_topo_init/germany50_results_9v.json
+  results/09_topo_init/germany50_dr_sweep_9v.png
   results/09_topo_init/adaptation_results.json
   results/09_topo_init/adaptation_plot.png
 """
@@ -35,11 +44,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scair.config import ScaIRConfig
 from scair.data_loader import load_all_traffic_matrices, load_topology, normalise_tm
 from scair.environment import RoutingEnvironment, Topology
-from scair.models import (PaperSubGNN, DotAttnSubGNN, LearnableAttnSubGNN,
-                           NeighborMaskSubGNN)
+from scair.models import (PaperSubGNN, DotAttnSubGNN, LearnableAttnSubGNN)
 from scair.topology_features import compute_init_vectors
-from train import (build_agents, build_agents_topo_init,
-                   build_agents_fixed_topo)
+from train import (build_agents, build_agents_topo_init, build_agents_fixed_topo)
 
 # ---------------------------------------------------------------------------
 # Config
@@ -47,6 +54,7 @@ from train import (build_agents, build_agents_topo_init,
 
 RESULTS        = "results/09_topo_init"
 SEED           = 42
+DR_VALUES      = [0.0, 0.4, 0.8]
 ADAPT_DR       = 0.6
 TRAIN_EPISODES = 200
 EVAL_EPISODES  = 50
@@ -54,42 +62,40 @@ ADAPT_EPISODES = 50
 N_PACKETS      = 100
 LOG_INTERVAL   = 50
 
-TOPO_FILE = "data/ABI/Topology.txt"
-TM_DIR    = "data/ABI/TrafficMatrix"
+SWEEP_TOPOS = [
+    ("brain",     "data/BRA/Topology.txt",   "data/BRA/TrafficMatrix",   "BRAIN"),
+    ("germany50", "data/GER50/Topology.txt", "data/GER50/TrafficMatrix", "Germany50"),
+]
 
 VARIANTS = [
-    ("scair",     "ScaIR (one-hot, concat)",    None,                "onehot",       True),
-    ("deg_mean",  "Degree + Mean GNN",           PaperSubGNN,         "degree",       True),
-    ("deg_dot",   "Degree + Dot-Attn GNN",       DotAttnSubGNN,       "degree",       True),
-    ("deg_lattn", "Degree + Learn-Attn GNN",     LearnableAttnSubGNN, "degree",       True),
-    ("bet_mean",  "Betw. + Mean GNN",             PaperSubGNN,         "betweenness",  True),
-    ("bet_dot",   "Betw. + Dot-Attn GNN",         DotAttnSubGNN,       "betweenness",  True),
-    ("bet_lattn", "Betw. + Learn-Attn GNN",       LearnableAttnSubGNN, "betweenness",  True),
-    ("sp_mean",   "ShortPath + Mean GNN",         PaperSubGNN,         "shortestpath", True),
-    ("sp_dot",    "ShortPath + Dot-Attn GNN",     DotAttnSubGNN,       "shortestpath", True),
-    ("sp_lattn",  "ShortPath + Learn-Attn GNN",   LearnableAttnSubGNN, "shortestpath", True),
-    ("deg_fixed", "Degree (no GNN)",              None,                "degree",       False),
-    ("bet_fixed", "Betw. (no GNN)",               None,                "betweenness",  False),
-    ("sp_fixed",  "ShortPath (no GNN)",           None,                "shortestpath", False),
+    ("scair",     "ScaIR (one-hot)",        None,               "onehot",      True),
+    ("deg_mean",  "Degree + Mean GNN",      PaperSubGNN,        "degree",      True),
+    ("deg_dot",   "Degree + Dot-Attn",      DotAttnSubGNN,      "degree",      True),
+    ("deg_lattn", "Degree + Learn-Attn",    LearnableAttnSubGNN,"degree",      True),
+    ("bet_mean",  "Betw. + Mean GNN",       PaperSubGNN,        "betweenness", True),
+    ("bet_dot",   "Betw. + Dot-Attn",       DotAttnSubGNN,      "betweenness", True),
+    ("bet_lattn", "Betw. + Learn-Attn",     LearnableAttnSubGNN,"betweenness", True),
+    ("deg_fixed", "Degree (no GNN)",        None,               "degree",      False),
+    ("bet_fixed", "Betw. (no GNN)",         None,               "betweenness", False),
 ]
 
 COLORS = {
     "scair":    "black",
-    "deg_mean": "steelblue",  "deg_dot": "dodgerblue",    "deg_lattn": "deepskyblue",
-    "bet_mean": "firebrick",  "bet_dot": "tomato",         "bet_lattn": "salmon",
-    "sp_mean":  "seagreen",   "sp_dot":  "mediumseagreen", "sp_lattn":  "lightgreen",
-    "deg_fixed":"royalblue",  "bet_fixed":"crimson",       "sp_fixed":  "forestgreen",
+    "deg_mean": "steelblue",  "deg_dot": "dodgerblue",  "deg_lattn": "deepskyblue",
+    "bet_mean": "firebrick",  "bet_dot": "tomato",       "bet_lattn": "salmon",
+    "deg_fixed":"royalblue",  "bet_fixed":"crimson",
 }
-MARKERS    = {"scair":"D", **{k:"o" for k,*_ in VARIANTS[1:4]},
-              **{k:"o" for k,*_ in VARIANTS[4:7]},
-              **{k:"o" for k,*_ in VARIANTS[7:10]},
-              **{k:"p" for k,*_ in VARIANTS[10:]}}
+MARKERS = {
+    "scair": "D",
+    "deg_mean":"o","deg_dot":"s","deg_lattn":"^",
+    "bet_mean":"o","bet_dot":"s","bet_lattn":"^",
+    "deg_fixed":"p","bet_fixed":"p",
+}
 LINESTYLES = {
-    "scair":"-",
+    "scair": "-",
     "deg_mean":"-","deg_dot":"-","deg_lattn":"-",
     "bet_mean":"--","bet_dot":"--","bet_lattn":"--",
-    "sp_mean":"-.","sp_dot":"-.","sp_lattn":"-.",
-    "deg_fixed":":","bet_fixed":":","sp_fixed":":",
+    "deg_fixed":":","bet_fixed":":",
 }
 
 
@@ -111,12 +117,16 @@ def add_node(topo, agents, cfg, new_id: int, connect_to: List[int]):
     new_agent = IRrAgent(new_id, list(connect_to), topo.num_nodes, cfg)
     agents.append(new_agent)
     for ex in connect_to:
+        if ex >= len(agents):
+            continue
         ag = agents[ex]
         if new_id not in ag.neighbours:
             ag.neighbours = ag.neighbours + [new_id]
             ag.degree = len(ag.neighbours)
             ag._nbr_to_idx = {n: i for i, n in enumerate(ag.neighbours)}
             ag.queue_lengths[new_id] = 0
+            for counts in ag._ucb_counts.values():
+                counts.append(0)
 
 
 def remove_link(topo, agents, cfg, u: int, v: int):
@@ -124,6 +134,8 @@ def remove_link(topo, agents, cfg, u: int, v: int):
     topo.adjacency[u] = [x for x in topo.adjacency[u] if x != v]
     topo.adjacency[v] = [x for x in topo.adjacency[v] if x != u]
     for node in (u, v):
+        if node >= len(agents):
+            continue
         old = agents[node]
         new_ag = IRrAgent(node, topo.adjacency[node], topo.num_nodes, cfg)
         new_ag.sub_gnn = old.sub_gnn
@@ -249,8 +261,40 @@ def adapt_and_eval(agents, cfg, env, adapt_eps, eval_eps):
 
 
 # ---------------------------------------------------------------------------
-# Plot
+# Plots
 # ---------------------------------------------------------------------------
+
+def plot_dr_sweep(results, topo_label, out_path):
+    drs = DR_VALUES
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+    fig.suptitle(f"9-Variant Experiment — {topo_label}", fontsize=13)
+
+    ax = axes[0]
+    ospf_vals = [results[dr]["ospf"] for dr in drs]
+    ax.plot(drs, ospf_vals, "o--", color="green", label="OSPF", linewidth=2)
+    for key, label, *_ in VARIANTS:
+        times = [results[dr][key]["avg"] for dr in drs]
+        ax.plot(drs, times, LINESTYLES[key], color=COLORS[key],
+                marker=MARKERS[key], label=label, linewidth=1.5, markersize=5)
+    ax.set_xlabel("D_r"); ax.set_ylabel("Avg Delivery Time (ms)")
+    ax.set_title("Delivery Time"); ax.legend(fontsize=7, ncol=2)
+    ax.grid(alpha=0.3); ax.set_xticks(drs)
+
+    ax = axes[1]
+    for key, label, *_ in VARIANTS:
+        gains = [(o - results[dr][key]["avg"]) / max(o, 1e-6) * 100
+                 for o, dr in zip(ospf_vals, drs)]
+        ax.plot(drs, gains, LINESTYLES[key], color=COLORS[key],
+                marker=MARKERS[key], label=label, linewidth=1.5, markersize=5)
+    ax.axhline(0, color="green", linestyle="--", linewidth=1.5, label="OSPF")
+    ax.set_xlabel("D_r"); ax.set_ylabel("Improvement over OSPF (%)")
+    ax.set_title("Gain vs OSPF"); ax.legend(fontsize=7, ncol=2)
+    ax.grid(alpha=0.3); ax.set_xticks(drs)
+
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150); plt.close(fig)
+    print(f"  Saved: {out_path}", flush=True)
+
 
 def plot_adaptation(adapt_results, out_path):
     scenarios = list(adapt_results.keys())
@@ -273,14 +317,11 @@ def plot_adaptation(adapt_results, out_path):
                    linewidth=1.2, label="OSPF (original)")
         ax.set_xlabel("Adaptation episodes")
         ax.set_ylabel("Avg Delivery Time (ms)")
-        ax.set_title(sc)
-        ax.legend(fontsize=6)
-        ax.grid(alpha=0.3)
+        ax.set_title(sc); ax.legend(fontsize=7); ax.grid(alpha=0.3)
         ax.set_xticks(x)
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=150)
-    plt.close(fig)
+    plt.savefig(out_path, dpi=150); plt.close(fig)
     print(f"  Saved: {out_path}", flush=True)
 
 
@@ -292,10 +333,91 @@ def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(RESULTS, exist_ok=True)
 
-    print(f"Loading Abilene topology...")
-    topo = load_topology(TOPO_FILE)
-    raw_tms = load_all_traffic_matrices(TM_DIR, topo.num_nodes)
-    tms = [normalise_tm(tm) for tm in raw_tms]
+    # =========================================================================
+    # Part 1 — DR sweep on BRAIN and Germany50
+    # =========================================================================
+    for topo_key, topo_file, tm_dir, topo_label in SWEEP_TOPOS:
+        json_path_check = os.path.join(RESULTS, f"{topo_key}_results_9v.json")
+        if os.path.exists(json_path_check):
+            print(f"\n  {topo_label} — already saved, skipping DR sweep", flush=True)
+            continue
+
+        print(f"\n{'#'*70}")
+        print(f"  {topo_label} — DR sweep (9 variants)")
+        print(f"{'#'*70}", flush=True)
+
+        topo    = load_topology(topo_file)
+        raw_tms = load_all_traffic_matrices(tm_dir, topo.num_nodes)
+        tms     = [normalise_tm(tm) for tm in raw_tms]
+        print(f"  {topo.num_nodes} nodes, {len(tms)} TMs", flush=True)
+
+        base_cfg = ScaIRConfig()
+        max_deg  = max(len(v) for v in topo.adjacency.values())
+        if topo.num_nodes > base_cfg.max_nodes:  base_cfg.max_nodes  = topo.num_nodes
+        if max_deg        > base_cfg.max_degree: base_cfg.max_degree = max_deg
+        base_cfg.action_method = "ucb"
+
+        print("  Computing topology features...", flush=True)
+        init_vs = {
+            "degree":      compute_init_vectors(topo, "degree",      base_cfg.feature_length),
+            "betweenness": compute_init_vectors(topo, "betweenness", base_cfg.feature_length),
+        }
+
+        topo_results = {}
+
+        for dr in DR_VALUES:
+            print(f"\n{'='*70}")
+            print(f"  [{topo_label}] D_r = {dr}", flush=True)
+            print(f"{'='*70}", flush=True)
+
+            cfg = copy.copy(base_cfg)
+            cfg.distribution_ratio  = dr
+            cfg.packets_per_episode = N_PACKETS
+
+            env_gen   = RoutingEnvironment(topo, cfg)
+            train_eps = pregenerate_episodes(env_gen, tms, TRAIN_EPISODES, N_PACKETS, seed_offset=0)
+            eval_eps  = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=1000)
+
+            ospf_val = eval_ospf(topo, cfg, eval_eps)
+            print(f"  OSPF: {ospf_val:.3f} ms", flush=True)
+
+            dr_results = {"ospf": ospf_val}
+
+            for key, label, gnn_cls, init_type, is_gnn in VARIANTS:
+                torch.manual_seed(SEED)
+                agents = build_variant_agents(key, gnn_cls, init_type, is_gnn, topo, cfg, init_vs)
+                env = RoutingEnvironment(topo, cfg)
+                train_variant(label, agents, cfg, env, train_eps)
+                avg = eval_agents(agents, env, eval_eps)
+                std_val = float(np.std([
+                    env.run_episode(p, agents, training=False)["avg_delivery_time"]
+                    for p in eval_eps
+                ]))
+                gain = (ospf_val - avg) / max(ospf_val, 1e-6) * 100
+                print(f"    {label}: {avg:.3f} ms ({gain:+.1f}% vs OSPF)", flush=True)
+                dr_results[key] = {"avg": avg, "std": std_val}
+
+            topo_results[dr] = dr_results
+
+        json_path = os.path.join(RESULTS, f"{topo_key}_results_9v.json")
+        with open(json_path, "w") as f:
+            json.dump({"topology": topo_label, "variants": 9,
+                       "results": {str(dr): r for dr, r in topo_results.items()}}, f, indent=2)
+        print(f"  Saved: {json_path}", flush=True)
+
+        plot_dr_sweep(topo_results, topo_label,
+                      os.path.join(RESULTS, f"{topo_key}_dr_sweep_9v.png"))
+
+    # =========================================================================
+    # Part 2 — Topology adaptation on Abilene (D_r=0.6)
+    # =========================================================================
+    print(f"\n{'#'*70}")
+    print(f"  Abilene — topology adaptation (D_r={ADAPT_DR})")
+    print(f"{'#'*70}", flush=True)
+
+    topo    = load_topology("data/ABI/Topology.txt")
+    raw_tms = load_all_traffic_matrices("data/ABI/TrafficMatrix", topo.num_nodes)
+    tms     = [normalise_tm(tm) for tm in raw_tms]
     print(f"  {topo.num_nodes} nodes, {len(tms)} TMs", flush=True)
 
     cfg = ScaIRConfig()
@@ -308,28 +430,22 @@ def main():
 
     print("  Computing topology features...", flush=True)
     init_vs = {
-        "degree":       compute_init_vectors(topo, "degree",       cfg.feature_length),
-        "betweenness":  compute_init_vectors(topo, "betweenness",  cfg.feature_length),
-        "shortestpath": compute_init_vectors(topo, "shortestpath", cfg.feature_length),
+        "degree":      compute_init_vectors(topo, "degree",      cfg.feature_length),
+        "betweenness": compute_init_vectors(topo, "betweenness", cfg.feature_length),
     }
 
-    # Pre-generate training and evaluation episodes
     env_gen = RoutingEnvironment(topo, cfg)
-    train_eps = pregenerate_episodes(env_gen, tms, TRAIN_EPISODES, N_PACKETS, seed_offset=0)
-    eval_eps  = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=1000)
-
-    # Adaptation episodes (separate seed to avoid overlap)
-    zero_shot_eps  = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=2000)
+    train_eps       = pregenerate_episodes(env_gen, tms, TRAIN_EPISODES, N_PACKETS, seed_offset=0)
+    eval_eps        = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=1000)
+    zero_shot_eps   = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=2000)
     adapt_train_eps = pregenerate_episodes(env_gen, tms, ADAPT_EPISODES, N_PACKETS, seed_offset=3000)
     adapt_eval_eps  = pregenerate_episodes(env_gen, tms, EVAL_EPISODES,  N_PACKETS, seed_offset=4000)
 
-    print(f"\nOSPF baseline (training topology): ", end="", flush=True)
     ospf_base = eval_ospf(topo, cfg, eval_eps)
-    print(f"{ospf_base:.3f} ms", flush=True)
+    print(f"  OSPF baseline: {ospf_base:.3f} ms", flush=True)
 
-    # ---- Train all 13 variants ----
     print(f"\n{'='*70}")
-    print(f"  Training 13 variants — Abilene D_r={ADAPT_DR}")
+    print(f"  Training 9 variants — Abilene D_r={ADAPT_DR}")
     print(f"{'='*70}", flush=True)
 
     trained_agents: Dict[str, list] = {}
@@ -343,10 +459,9 @@ def main():
         print(f"  {label}: {avg:.3f} ms ({gain:+.1f}% vs OSPF)", flush=True)
         trained_agents[key] = agents
 
-    # ---- Adaptation scenarios ----
     SCENARIOS = [
-        ("Add node 11 (->0, ->8)", add_node,    {"new_id": 11, "connect_to": [0, 8]}),
-        ("Remove link 3-6",        remove_link,  {"u": 3, "v": 6}),
+        ("Add node 11 (->0, ->8)", add_node,   {"new_id": 11, "connect_to": [0, 8]}),
+        ("Remove link 3-6",        remove_link, {"u": 3, "v": 6}),
     ]
 
     adapt_results = {}
@@ -356,7 +471,6 @@ def main():
         print(f"  Scenario: {sc_name}", flush=True)
         print(f"{'='*70}", flush=True)
 
-        # OSPF on original topology
         ospf_before = eval_ospf(topo, cfg, zero_shot_eps)
 
         sc_agents_results = {}
@@ -370,7 +484,6 @@ def main():
             agents_mod = copy_mod.deepcopy(trained_agents[key])
 
             sc_fn(topo_mod, agents_mod, cfg_mod, **sc_kwargs)
-
             env_mod = RoutingEnvironment(topo_mod, cfg_mod)
 
             zs    = eval_agents(agents_mod, env_mod, zero_shot_eps)
@@ -383,7 +496,6 @@ def main():
                   f"after {ADAPT_EPISODES} eps={after:.3f} ({gain_after:+.1f}%)", flush=True)
             sc_agents_results[key] = {"zero_shot": zs, "after_adapt": after}
 
-        # OSPF on modified topology
         topo_for_ospf = copy_topology(topo)
         dummy_agents = []
         sc_fn(topo_for_ospf, dummy_agents, cfg, **sc_kwargs)
@@ -395,7 +507,6 @@ def main():
             "ospf_after":  ospf_after,
         }
 
-    # ---- Save & plot ----
     out_path = os.path.join(RESULTS, "adaptation_results.json")
     with open(out_path, "w") as f:
         json.dump(adapt_results, f, indent=2, default=float)
@@ -403,7 +514,6 @@ def main():
 
     plot_adaptation(adapt_results, os.path.join(RESULTS, "adaptation_plot.png"))
 
-    # ---- Summary table ----
     print(f"\n{'='*70}")
     print(f"  ADAPTATION SUMMARY — Abilene D_r={ADAPT_DR}")
     print(f"{'='*70}")
