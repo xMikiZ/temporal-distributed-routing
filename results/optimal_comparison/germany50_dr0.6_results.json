@@ -1,0 +1,23 @@
+{
+  "topology": "germany50",
+  "dr": 0.6,
+  "train_episodes": 300,
+  "eval_episodes": 50,
+  "packets_per_episode": 100,
+  "no_congestion_lb": {
+    "mean": 4.3506,
+    "std": 0.12017337475497644
+  },
+  "oracle_greedy": {
+    "mean": 5.2116,
+    "std": 0.2897748091190814
+  },
+  "scair": {
+    "mean": 5.469611931645511,
+    "std": 0.3671990434243977
+  },
+  "ospf": {
+    "mean": 15.645399999999997,
+    "std": 3.0651428743208693
+  }
+}

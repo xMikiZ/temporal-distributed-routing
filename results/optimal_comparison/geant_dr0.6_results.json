@@ -1,0 +1,23 @@
+{
+  "topology": "geant",
+  "dr": 0.6,
+  "train_episodes": 300,
+  "eval_episodes": 50,
+  "packets_per_episode": 100,
+  "no_congestion_lb": {
+    "mean": 2.7675999999999994,
+    "std": 0.05701087615534422
+  },
+  "oracle_greedy": {
+    "mean": 3.8566,
+    "std": 0.30932578295383006
+  },
+  "scair": {
+    "mean": 4.017359595959595,
+    "std": 0.3130189893099223
+  },
+  "ospf": {
+    "mean": 10.986800000000002,
+    "std": 2.4736519076054333
+  }
+}
