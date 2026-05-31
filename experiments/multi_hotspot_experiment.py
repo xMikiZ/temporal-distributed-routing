@@ -54,12 +54,17 @@ SEED     = 42
 TOPO_FILE = "data/GER50/Topology.txt"
 TM_DIR    = "data/GER50/TrafficMatrix"
 
-# 4 hot-spot pairs (src, dst) — paths share nodes 49, 28, 25, 13, 5
-HOTSPOT_PAIRS = [(5, 24), (49, 28), (25, 45), (13, 22)]
-DR_TOTAL   = 0.6          # total fraction of hot-spot packets
+# 4 hot-spot pairs — ALL share the directed bottleneck corridor 25→13→49
+# (verified: every OSPF path passes through edge 25→13 and 13→49)
+#   7→26:  [7,6,22,5,25,13,49,1,34,26]      9 hops
+#  36→40:  [36,48,14,10,25,13,49,1,34,40]   9 hops
+#  15→30:  [15,27,21,5,25,13,49,45,30]      8 hops
+#  38→34:  [38,6,22,5,25,13,49,1,34]        8 hops
+HOTSPOT_PAIRS = [(7, 26), (36, 40), (15, 30), (38, 34)]
+DR_TOTAL    = 0.6          # total fraction of hot-spot packets
 DR_PER_PAIR = DR_TOTAL / len(HOTSPOT_PAIRS)   # 0.15 each
 
-TRAIN_EPISODES = 300
+TRAIN_EPISODES = 800
 EVAL_EPISODES  = 50
 N_PACKETS      = 100
 
@@ -142,13 +147,14 @@ def no_congestion_lb(topo, cfg, packets: List[Packet]) -> float:
 
 def train_scair_multi(topo, cfg, tms, n_episodes, n_packets,
                       hotspot_pairs, dr_total, seed):
-    """Train ScaIR agents using multi-hotspot episodes."""
+    """Train ScaIR agents using multi-hotspot episodes. Returns (agents, curve)."""
     from train import build_agents
 
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     agents = build_agents(topo, cfg)
     env = RoutingEnvironment(topo, cfg)
     t0 = time.time()
+    curve = []   # (episode, avg_delivery_time)
 
     for ep in range(1, n_episodes + 1):
         random.seed(seed + ep); np.random.seed(seed + ep)
@@ -157,6 +163,7 @@ def train_scair_multi(topo, cfg, tms, n_episodes, n_packets,
             topo, tm, n_packets, hotspot_pairs, dr_total, cfg.generation_interval
         )
         stats = env.run_episode(packets, agents, training=True)
+        curve.append((ep, stats["avg_delivery_time"]))
 
         if ep == 10:
             for ag in agents: ag.set_learning_rate(cfg.learning_rate)
@@ -169,7 +176,7 @@ def train_scair_multi(topo, cfg, tms, n_episodes, n_packets,
                   f"t={stats['avg_delivery_time']:.2f}ms  "
                   f"σ={agents[0].sigma:.2f}  ({time.time()-t0:.0f}s)", flush=True)
 
-    return agents
+    return agents, curve
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +255,7 @@ def main():
     # 4. ScaIR
     # ----------------------------------------------------------------
     print(f"\nTraining ScaIR ({TRAIN_EPISODES} eps) ...", flush=True)
-    agents = train_scair_multi(
+    agents, train_curve = train_scair_multi(
         topo, cfg, tms, TRAIN_EPISODES, N_PACKETS,
         HOTSPOT_PAIRS, DR_TOTAL, SEED
     )
@@ -272,7 +279,7 @@ def main():
     methods = [
         ("No-congestion lower bound", lb_mean,     lb_std),
         ("Oracle Greedy (online)",    oracle_mean, oracle_std),
-        ("ScaIR (UCB, 300 eps)",      scair_mean,  scair_std),
+        (f"ScaIR (UCB, {TRAIN_EPISODES} eps)", scair_mean, scair_std),
         ("OSPF",                      ospf_mean,   ospf_std),
     ]
     for name, mean, std in methods:
@@ -316,6 +323,7 @@ def main():
         "oracle_greedy":     {"mean": oracle_mean, "std": oracle_std},
         "scair":             {"mean": scair_mean,  "std": scair_std},
         "ospf":              {"mean": ospf_mean,   "std": ospf_std},
+        "training_curve":    train_curve,
     }
     json_path = os.path.join(RESULTS, "germany50_multi_hotspot_results.json")
     with open(json_path, "w") as f:
@@ -325,7 +333,7 @@ def main():
     # ----------------------------------------------------------------
     # Plot
     # ----------------------------------------------------------------
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     fig.suptitle("Germany50 — Multi-Hotspot (4 pairs, D_r=0.6 total)", fontsize=13)
 
     # Bar chart
@@ -369,6 +377,21 @@ def main():
     pct = lambda v: f"{v/max(ospf_floor,1e-6)*100:.0f}%"
     title_parts = [f"{s[0].split(chr(10))[0]}: {pct(s[1])}" for s in segments]
     ax.set_title("Gap decomposition\n" + " | ".join(title_parts), fontsize=9)
+
+    # Training curve
+    ax = axes[2]
+    eps_x = [e for e, _ in train_curve]
+    eps_y = [t for _, t in train_curve]
+    # Smooth with window=20
+    win = 20
+    smoothed = np.convolve(eps_y, np.ones(win)/win, mode='valid')
+    ax.plot(eps_x, eps_y, color="#e67e22", alpha=0.25, linewidth=0.8)
+    ax.plot(eps_x[win-1:], smoothed, color="#e67e22", linewidth=2, label="ScaIR (smoothed)")
+    ax.axhline(ospf_mean, color="#e74c3c", linestyle="--", linewidth=1.5, label=f"OSPF {ospf_mean:.2f}ms")
+    ax.axhline(oracle_mean, color="#9b59b6", linestyle="--", linewidth=1.5, label=f"Oracle {oracle_mean:.2f}ms")
+    ax.axhline(lb_mean, color="#2ecc71", linestyle=":", linewidth=1.5, label=f"LB {lb_mean:.2f}ms")
+    ax.set_xlabel("Training Episode"); ax.set_ylabel("Avg Delivery Time (ms)")
+    ax.set_title("ScaIR Training Curve"); ax.legend(fontsize=8); ax.grid(alpha=0.3)
 
     plt.tight_layout()
     plot_path = os.path.join(RESULTS, "germany50_multi_hotspot_comparison.png")
