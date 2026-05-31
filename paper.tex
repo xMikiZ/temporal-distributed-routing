@@ -1,0 +1,592 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+
+\usepackage[breaklinks=true,bookmarks=false]{hyperref}
+
+\cvprfinalcopy
+
+\def\cvprPaperID{****}
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+\setcounter{page}{1}
+\begin{document}
+
+\title{Distributed Deep Reinforcement Learning for Packet Routing:\\
+An Empirical Analysis of ScaIR}
+
+\author{Miquel Ainaud\\
+{\tt\small miquel.ainaud@estudiantat.upc.edu}
+\and
+Josep Vidal\\
+{\tt\small josep.vidal@upc.edu}
+}
+
+\maketitle
+
+\begin{abstract}
+We implement and systematically evaluate ScaIR, a distributed multi-agent
+deep reinforcement learning algorithm for packet routing, across four real
+network topologies and a range of traffic conditions. Our Python
+re-implementation closely follows the original design, in which each router
+maintains an independent deep Q-network paired with a local sub-graph neural
+network (sub-GNN) that compresses neighbourhood topology into a fixed-length
+feature vector. Through a series of controlled experiments we establish four
+main findings. First, ScaIR reduces average delivery time by 40--80\% over
+static OSPF routing when hot-spot traffic is present, with the advantage
+growing with network size and congestion level. Second, an ablation study
+reveals that the sub-GNN is not the principal driver of these gains: fixed
+topology encodings---including a simple one-hot node identifier---match or
+exceed the full GNN within a 300-episode training budget, suggesting the
+multi-agent Q-network and UCB exploration are the components that matter.
+Third, on two topologies ScaIR trained for 300 episodes reaches a delivery
+time within 5\% of an Oracle Greedy baseline that has full knowledge of
+instantaneous queue states. Fourth, a multi-hotspot scenario with four
+simultaneous bottleneck flows sharing a common network corridor is
+significantly harder: ScaIR requires 800 episodes to converge, yet still
+ends up within 5\% of the oracle, indicating that the algorithm scales to
+more complex coordination problems given sufficient training.
+\end{abstract}
+
+\section{Introduction}
+
+Packet routing is one of the foundational control problems in computer
+networking. The dominant deployed protocol, OSPF, computes shortest paths
+with unit link weights using Dijkstra's algorithm \cite{dijkstra1959} and
+distributes the resulting forwarding tables statically. OSPF is efficient
+and provably loop-free, but it is oblivious to instantaneous congestion: when
+a large fraction of traffic is concentrated on a small number of
+source--destination pairs, shortest paths become saturated and queueing
+delays dominate, while alternative, longer routes remain idle.
+
+Machine learning based routing addresses this limitation by letting routers
+learn to route around congestion rather than following pre-computed shortest
+paths. Early work such as Q-routing \cite{boyan1994} showed that
+reinforcement learning agents can adapt to dynamic load, but suffered from
+scalability problems because Q-tables grow exponentially with network size.
+Deep Q-routing replaces tables with neural networks and introduced the
+combination of centralized training with distributed execution
+\cite{mukhutdinov2019}. More recent systems such as DQRC \cite{you2020}
+incorporate one-hop neighbourhood communication to improve global
+situational awareness while keeping decision-making local.
+
+ScaIR \cite{scair2025} extends this line of work by coupling each router's
+Q-network with a distributed sub-GNN that iteratively exchanges compact
+feature vectors with direct neighbours. The sub-GNN acts as a compressed
+summary of the broader topology, giving each agent an approximate global
+view without centralised data collection. The paper demonstrated gains
+over OSPF and DQRC on Abilene and GEANT, but left several questions open:
+how the gains scale with topology size, whether the GNN component is
+genuinely necessary, and how close the learned policy is to a theoretical
+optimum.
+
+This project addresses those questions through a systematic re-implementation
+in Python and a series of controlled experiments. Our specific contributions
+are: (i) evaluation on four real backbone topologies spanning 9 to 50 nodes
+with measured traffic matrices; (ii) a GNN ablation study that isolates the
+contribution of learned topology features from the contribution of the
+Q-network and exploration strategy; (iii) a quantitative optimality gap
+analysis using an Oracle Greedy baseline; and (iv) a multi-hotspot traffic
+scenario designed to create genuine load-balancing competition that a single
+bottleneck avoidance strategy cannot solve.
+
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+The network is modelled as an undirected graph $G = (N, L)$ where $N$ is the
+set of router nodes and $L$ the set of bidirectional links. Each packet has a
+source $s$ and destination $d$ and enters the network at time $t_s$ drawn
+from a Poisson arrival process with mean inter-arrival time $G_i = 0.5$\,ms.
+Source--destination pairs are sampled proportionally to a measured traffic
+matrix $\mathbf{T}$, with a fraction $D_r \in [0, 1]$ of packets forced onto
+a fixed hot-spot pair (node $0$ to node $N-1$) to model congestion
+scenarios. The diagonal of $\mathbf{T}$ is zeroed so self-routing never
+occurs.
+
+Each router processes its queue sequentially. When a packet at the head of
+the queue is forwarded to neighbour $v$, the forwarding cost is
+\begin{equation}
+  c_t = q_{n,v} + h,
+  \label{eq:cost}
+\end{equation}
+where $q_{n,v}$ is the number of packets already queued on interface $n
+\rightarrow v$ (each contributing 1\,ms of queuing delay) and $h = 1$\,ms
+is a fixed transmission time per hop. The routing objective is to minimise
+the mean delivery time across all packets in an episode:
+\begin{equation}
+  \min \;\frac{1}{|P|}\sum_{p \in P} (t_p^{\text{arrive}} - t_p^{\text{birth}}).
+  \label{eq:objective}
+\end{equation}
+
+The OSPF baseline computes shortest paths (unit link weights) with Dijkstra's
+algorithm and fixes the routing table for the entire episode; it has no
+congestion awareness. We additionally introduce an \emph{Oracle Greedy}
+baseline that, at every forwarding decision, recomputes Dijkstra with edge
+weights equal to current queue lengths plus the transmission time. This
+represents the best policy achievable by any online algorithm that observes
+only instantaneous queue states, without look-ahead.
+
+
+\section{Architecture}
+\label{sec:arch}
+
+\subsection{Per-node agents}
+
+Each router $n$ is an independent agent comprising two neural networks: a
+sub-GNN $N_{\mathrm{sub}}$ and a Q-network $N_Q$. They are trained jointly
+via a single RMSprop optimiser.
+
+\textbf{Sub-GNN.} Router $n$ maintains a feature vector $\mathbf{V}_n \in
+\mathbb{R}^{F_l}$ with $F_l = 128$. At initialisation $\mathbf{V}_n$ is a
+one-hot encoding of the node index, zero-padded to length $F_l$. During
+operation, $\mathbf{V}_n$ is updated periodically via message passing:
+\begin{equation}
+  \mathbf{V}_n^{(t)} = f_w\!\left([\mathbf{V}_n^{(t-1)},\,
+  \tfrac{1}{|N_n|}\!\sum_{y \in N_n} \mathbf{V}_y^{(t-1)}]\right),
+  \label{eq:gnn}
+\end{equation}
+where $f_w$ is a two-layer MLP with ReLU activations and $N_n$ is the set of
+one-hop neighbours. This differs slightly from the original paper, which
+applies $f_w$ to each neighbour's vector before averaging; an ablation
+experiment (Experiment 7) confirmed that both formulations produce identical
+routing performance. A second MLP $g_w$ maps the converged $\mathbf{V}_n$ to
+an output feature $\mathbf{o}_n$ that feeds the Q-network. At the start of
+each episode $\mathbf{V}_n$ is reset to the one-hot initialisation and $K =
+8$ warm-up message-passing rounds are executed; subsequently $I_n = 3$ rounds
+are run every 10 forwarding decisions.
+
+\textbf{Q-network.} The state observed by agent $n$ when routing packet $p$
+is the concatenation of four components: a one-hot encoding of the
+destination node ($N_{\max}$ bits), a vector of queue lengths for each
+outgoing interface ($D_{\max}$ values), the sub-GNN output $\mathbf{o}_n$
+($F_l$ values), and a history of the last $k = 5$ actions ($k \cdot D_{\max}$
+one-hots). The Q-network maps this state to one Q-value per interface; only
+the first $|N_n|$ outputs are used.
+
+\textbf{Action selection.} We replace the paper's $\sigma$-greedy policy with
+a Lower Confidence Bound (UCB) strategy suited to cost minimisation:
+\begin{equation}
+  a^* = \arg\min_{a}\!\left[Q(s, a) -
+  c\sqrt{\frac{\ln(N_{\mathrm{total}} + 1)}{n_a}}\right],
+  \label{eq:ucb}
+\end{equation}
+where $n_a$ is the visit count for action $a$ and $c = 2.0$ controls
+exploration. Unvisited actions are tried first. UCB accumulates counts across
+episodes, making exploration decrease naturally as the policy matures.
+
+\subsection{Training procedure}
+
+Each training episode generates $P_n = 100$ packets and routes them through
+the event-driven simulator. Experience tuples $(s_t, c_t, a_t, e_t)$ are
+stored in a replay buffer of size 200. Every 10 forwarding decisions a
+mini-batch of 64 transitions is sampled and a gradient step is taken to
+minimise the temporal-difference loss:
+\begin{equation}
+  \mathcal{L} = \left(c_t + \gamma \cdot e_t - Q(s_t, a_t)\right)^2,
+  \label{eq:tdloss}
+\end{equation}
+with $\gamma = 1$ and $e_t = \min_{a'} \hat{Q}(s_{t+1}, a')$ evaluated on a
+target network. The target network is hard-updated every 10 episodes. The
+initial learning rate is $10^{-3}$ throughout (the paper's 0.1 first-10
+schedule causes dead ReLU neurons at the millisecond Q-value scale).
+
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\textbf{Topologies.} We test on four real backbone networks sourced from
+SNDlib and the Topology Zoo: Abilene (11 nodes, 14 links), the aggregated
+BRAIN Berlin backbone (9 nodes, 12 links), GEANT (23 nodes, 37 links), and
+the DFN Germany50 network (50 nodes, 88 links). All topologies use measured
+real-world traffic matrices: 2254 five-minute TMs for Abilene (Internet2),
+8619 one-minute TMs for BRAIN (SNDlib), 122 matrices for GEANT, and 288
+five-minute TMs for Germany50 (SNDlib).
+
+\textbf{Protocol.} Unless stated otherwise, all experiments train for 300
+episodes with UCB exploration and evaluate on 50 held-out episodes generated
+from a fixed random seed distinct from the training seed. We vary $D_r \in
+\{0.0, 0.4, 0.6, 0.8\}$ to cover the range from purely traffic-matrix-driven
+demand to heavy hot-spot congestion.
+
+\textbf{Baselines.} OSPF provides the standard routing comparison. The Oracle
+Greedy baseline serves as an empirical upper bound: it re-runs Dijkstra with
+current queue weights at every hop and is therefore unachievable by any
+practical deployed system, since it requires instantaneous global queue
+information.
+
+
+\section{Results}
+\label{sec:results}
+
+\subsection{Performance across topologies and congestion levels}
+
+Table~\ref{tab:main} reports average delivery times for ScaIR and OSPF at
+two representative congestion levels on all four topologies, along with the
+relative improvement. Under low or zero hot-spot traffic ($D_r = 0.0$),
+OSPF remains competitive or marginally better on Abilene, where the real
+TMs are fairly uniform; ScaIR achieves a 6\% improvement at best on this
+topology. On BRAIN and Germany50, whose real TMs already contain concentrated
+demand patterns, ScaIR beats OSPF by 44\% and 15\% even at $D_r = 0.0$,
+confirming that congestion-aware routing is beneficial whenever traffic is
+unbalanced, not just under artificial hot-spot injection.
+
+At $D_r = 0.6$ and $D_r = 0.8$ the gap widens substantially across all
+topologies. On Germany50 at $D_r = 0.8$, OSPF reaches 28.0\,ms while ScaIR
+stays below 7.5\,ms---a roughly four-fold speedup. This amplification with
+network scale is expected: longer paths mean congestion compounds across more
+hops, giving a routing algorithm that avoids the bottleneck a larger absolute
+advantage. All four architectural variants (per-node and shared Q-networks,
+mean aggregation and dot-product attention in the GNN) produce delivery times
+within 0.3\,ms of each other on topologies with up to 23 nodes. On Germany50
+a small but consistent ordering emerges at $D_r = 0.8$: the per-node
+attention variant achieves 6.77\,ms against the mean-aggregation per-node
+variant's 7.47\,ms (10\% relative gap), suggesting that selectively weighting
+neighbour feature vectors starts to matter on larger, more heterogeneous
+topologies.
+
+\begin{table}[t]
+\centering
+\caption{Average delivery time (ms) for ScaIR and OSPF. ``Gain'' is the
+relative improvement of ScaIR over OSPF. All ScaIR results use UCB
+exploration and per-node Q-networks.}
+\label{tab:main}
+\small
+\begin{tabular}{llccc}
+\toprule
+Topology & $D_r$ & OSPF & ScaIR & Gain \\
+\midrule
+\multirow{2}{*}{Abilene (11)} & 0.0 & 3.35 & 3.52 & $-5\%$ \\
+ & 0.8 & 16.20 & 6.89 & $+57\%$ \\
+\midrule
+\multirow{2}{*}{BRAIN (9)} & 0.0 & 4.15 & 2.30 & $+44\%$ \\
+ & 0.8 & 15.52 & 3.01 & $+81\%$ \\
+\midrule
+\multirow{2}{*}{GEANT (23)} & 0.0 & 2.92 & 2.74 & $+6\%$ \\
+ & 0.8 & 22.87 & 5.42 & $+76\%$ \\
+\midrule
+\multirow{2}{*}{Germany50 (50)} & 0.0 & 4.89 & 4.13 & $+15\%$ \\
+ & 0.8 & 28.03 & 6.77 & $+76\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{The GNN is not the key component}
+
+A natural question is whether the sub-GNN's learned topology representation
+is responsible for the gains over OSPF, or whether the multi-agent Q-network
+with local observations is sufficient. To test this, we replace the sub-GNN
+with a fixed, non-trained feature vector of the same length $F_l = 128$,
+keeping the Q-network architecture and UCB exploration unchanged. We
+consider two fixed encodings: a one-hot vector at position $n$ (unique node
+identity, zero topology information) and a binary neighbour-mask with ones at
+each neighbour's index (immediate connectivity, no learned content). Both are
+non-differentiable constants; the Q-network receives them as static inputs
+and trains as normal.
+
+Table~\ref{tab:ablation} shows the Germany50 results at $D_r = 0$ and $D_r =
+0.8$, where the comparison is cleanest because both the GNN reference and the
+no-GNN variants use UCB exploration. At $D_r = 0.8$, the best no-GNN variant
+(OneHot shared-Q: 6.18\,ms) is 8.7\% better than the GNN variant (6.77\,ms),
+not worse. The pattern holds on BRAIN and Abilene. The GNN therefore adds no
+measurable benefit within a 300-episode training budget, and the Q-network
+with UCB exploration alone captures the routing quality.
+
+Why does the GNN not help? The Q-network's other inputs---per-interface queue
+lengths and recent action history---already contain the congestion signal
+needed to route around bottlenecks. Feature vectors $\mathbf{V}_n$ encode
+topology structure, but since all packets depart from the same set of sources
+and destinations in each episode, the Q-network can learn source--destination
+pair specific policies from the destination one-hot and queue observations
+alone, without needing a global topology summary. This finding is consistent
+across all topologies tested. A longer training budget might eventually allow
+the GNN to provide an advantage, but within 300 episodes it is a free
+parameter that converges to an encoding that neither helps nor hurts.
+
+\begin{table}[t]
+\centering
+\caption{GNN ablation on Germany50 (UCB throughout). ScaIR-GNN is the
+reference; OneHot and NbrMask replace the sub-GNN with a fixed vector.
+Per-Q and Shared-Q denote per-node vs.\ shared Q-network.}
+\label{tab:ablation}
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{$D_r = 0.0$} & \multicolumn{2}{c}{$D_r = 0.8$} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Variant & ms & vs.\ GNN & ms & vs.\ GNN \\
+\midrule
+ScaIR-GNN (per-Q) & 4.13 & --- & 6.77 & --- \\
+\midrule
+OneHot per-Q & 3.93 & $-4.9\%$ & 6.58 & $-2.8\%$ \\
+OneHot shared-Q & 3.94 & $-4.6\%$ & \textbf{6.18} & $-8.7\%$ \\
+NbrMask per-Q & 3.96 & $-4.1\%$ & 6.63 & $-2.1\%$ \\
+NbrMask shared-Q & 3.92 & $-5.1\%$ & 6.37 & $-5.9\%$ \\
+\midrule
+OSPF & 4.89 & $+18.5\%$ & 28.03 & $+314\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Proximity to the theoretical online optimum}
+
+Having established the magnitude of the ScaIR--OSPF gap, we ask how much of
+the achievable improvement ScaIR actually captures. The Oracle Greedy
+baseline provides an empirical ceiling: it replaces ScaIR's Q-network with a
+Dijkstra computation that uses \emph{current} queue lengths as edge weights,
+selecting the next hop with the lowest estimated remaining cost at every
+forwarding decision. It cannot be deployed in practice (it requires
+instantaneous global queue information), but it quantifies the headroom above
+ScaIR.
+
+Table~\ref{tab:oracle} decomposes the OSPF--floor gap into three parts. The
+no-congestion lower bound is the minimum achievable delivery time if all
+queuing were eliminated, computed as $\text{hops}_{\min}(s,d) \times 1$\,ms
+per packet. The difference between the Oracle and this floor is
+\emph{irreducible congestion}---the queuing delay that even a perfect online
+policy cannot avoid because multiple packets physically share links. The
+difference between ScaIR and the Oracle is the \emph{routing suboptimality},
+i.e., the fraction of the available improvement that ScaIR has not yet
+captured.
+
+On both GEANT and Germany50 at $D_r = 0.6$, ScaIR captures roughly 84--90\%
+of the OSPF--floor gap and sits within 4--5\% of the Oracle. The routing
+suboptimality accounts for only 2\% of the total gap. This result has an
+important implication for the architectural experiments: any variant
+difference smaller than $\sim$0.3\,ms is noise, not signal, because there is
+simply not enough improvement headroom to distinguish variants.
+
+\begin{table}[t]
+\centering
+\caption{Gap decomposition at $D_r = 0.6$. ``Floor'' is the no-congestion
+lower bound (minimum hops $\times$ 1\,ms). Percentages are fractions of the
+OSPF--floor gap. ScaIR uses UCB, 300 training episodes.}
+\label{tab:oracle}
+\small
+\begin{tabular}{lcccc}
+\toprule
+ & Floor & Oracle & ScaIR & OSPF \\
+\midrule
+\multicolumn{5}{l}{\textit{GEANT (23 nodes)}} \\
+Time (ms) & 2.77 & 3.86 & 4.02 & 10.99 \\
+\% of gap & --- & $+13\%$ & $+15\%$ & $100\%$ \\
+\midrule
+\multicolumn{5}{l}{\textit{Germany50 (50 nodes)}} \\
+Time (ms) & 4.35 & 5.21 & 5.47 & 15.65 \\
+\% of gap & --- & $+8\%$ & $+10\%$ & $100\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Multi-hotspot traffic: a harder coordination problem}
+\label{sec:multi}
+
+The single hot-spot scenario ($D_r = 0.6$, one congested
+source--destination pair) is evidently a problem that ScaIR learns quickly
+and nearly solves. To construct a genuinely harder scenario we introduce
+\emph{multi-hotspot} traffic: four simultaneous hot-spot pairs on Germany50,
+each carrying 15\% of total packets ($D_r = 0.6$ in aggregate). The pairs
+are chosen so that every OSPF shortest path must traverse the same directed
+link corridor $25 \rightarrow 13 \rightarrow 49$, verified by computing
+that all four paths share the directed edges $(25, 13)$ and $(13, 49)$. This
+forces the routing agents to collectively decide how to distribute 60\% of
+the traffic across alternative routes departing from node 49, which has five
+neighbours; no single pair dominates, so there is no obvious bottleneck to
+avoid.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/multi_hotspot/germany50_multi_hotspot_comparison.png}
+\caption{Multi-hotspot results on Germany50. \emph{Left}: average delivery
+time for each method. \emph{Right}: gap decomposition showing how the
+OSPF--floor margin is split between irreducible congestion, ScaIR
+suboptimality, and ScaIR's gain over OSPF. \emph{Right panel, training
+curve}: episode-by-episode delivery time during the 800-episode training run,
+with a 20-episode smoothing window. OSPF and Oracle references are shown as
+dashed lines.}
+\label{fig:multi}
+\end{figure}
+
+Figure~\ref{fig:multi} and Table~\ref{tab:multi} summarise the results with
+800 training episodes. OSPF reaches 12.8\,ms---substantially above the
+6.4\,ms no-congestion floor---because the shared corridor creates a real
+bottleneck. The Oracle achieves 7.3\,ms, 43\% below OSPF. ScaIR converges to
+7.6\,ms over 800 episodes, ending 5\% above the Oracle and 41\% below OSPF.
+The training curve in Figure~\ref{fig:multi} shows that most learning occurs
+in the first 200 episodes (from 33\,ms to approximately 9\,ms), after which
+the policy refines slowly. Notably, by episode 300 ScaIR is already
+competitive with OSPF, whereas the same 300 episodes are sufficient to reach
+near-Oracle performance in the single-hotspot case. The additional 500
+episodes push ScaIR past OSPF and close the gap to Oracle.
+
+The multi-hotspot result confirms two things simultaneously: the problem is
+genuinely harder (ScaIR does not saturate as quickly), and the algorithm does
+scale to it---given sufficient training, it converges to a policy within 5\%
+of the Oracle on a problem that requires coordinating load across four
+competing flows through a shared corridor.
+
+\begin{table}[t]
+\centering
+\caption{Multi-hotspot (4 pairs via corridor $25 \!\to\! 13 \!\to\! 49$) vs.\
+single hotspot on Germany50, $D_r = 0.6$. ScaIR uses 800 train episodes for
+multi-hotspot, 300 for single-hotspot.}
+\label{tab:multi}
+\small
+\begin{tabular}{lcccc}
+\toprule
+Scenario & Floor & Oracle & ScaIR & OSPF \\
+\midrule
+Single hotspot & 4.35 & 5.21 & 5.47 & 15.65 \\
+Multi-hotspot & 6.41 & 7.25 & 7.59 & 12.79 \\
+\midrule
+ScaIR vs Oracle & & & $+5.0\%$ & \\
+ScaIR vs Oracle (multi) & & & $+4.7\%$ & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\section{Topology Adaptation}
+\label{sec:adapt}
+
+A practical routing system must handle topology changes without a full
+retraining cycle. We test two scenarios on Abilene: inserting a new router
+(node 11, connected to nodes 0 and 8) and removing link 3--6. In both cases
+the trained agents are retained and evaluated immediately (\emph{zero-shot}),
+then allowed 50 online adaptation episodes.
+
+Link removal is handled gracefully. All variants achieve 4.2--4.9\,ms
+zero-shot after the link is removed, better than OSPF (7.3\,ms) on the
+original topology. The learned policy had already found routes that do not
+critically depend on the removed link. Node insertion is considerably more
+disruptive. ScaIR (one-hot aggregation) degrades from 4.3\,ms to 7.8\,ms
+zero-shot (+81\%), while mean-aggregation GNN variants---which receive
+message-passing updates from the newly inserted, untrained node---degrade
+catastrophically to 160--300\,ms because the new node's uninitialised feature
+vector corrupts the converged feature representations of its neighbours. After
+50 online adaptation episodes, all variants recover to approximately
+4.0--4.7\,ms. The attention-based GNN variants (\emph{dot-attn} and
+\emph{learnable-attn}) are more robust zero-shot (5.6--6.8\,ms) because
+attention scores can downweight the new neighbour's anomalous feature vector
+before adaptation.
+
+
+\section{Discussion}
+\label{sec:discussion}
+
+The central empirical finding of this study is that the performance of ScaIR
+is driven by the combination of multi-agent DQN with UCB exploration and
+local congestion observations (queue lengths, action history), not by the GNN
+topology encoder. On every topology tested, removing the GNN and replacing it
+with a one-hot node identifier produces equivalent or slightly better routing
+within 300 episodes. This does not mean that GNNs are useless for routing in
+general: the paper's own ablation shows that $F_l = 5$ feature vectors
+(insufficient to represent topology) produce visibly worse convergence. The
+conclusion is more specific---a 128-dimensional one-hot is already rich enough
+to learn the required policy within the episode budget, so the learned GNN
+representation offers no marginal value over a static one.
+
+The Oracle Greedy comparison provides useful context for interpreting all
+variant experiments. Since ScaIR already sits within 5\% of the Oracle under
+single-hotspot conditions, any architectural modification must close a gap
+smaller than 0.2\,ms on GEANT and 0.3\,ms on Germany50. Those differences are
+at or below the episode-to-episode variance ($\sigma \approx 0.3$\,ms), which
+explains why every variant experiment in this work---different GNN
+aggregations, different initialisation strategies, shared vs.\ per-node
+weights---yields nearly identical results. The problem is effectively solved
+at the single-hotspot scale.
+
+The multi-hotspot experiment breaks this saturation by constructing a scenario
+that requires genuine multi-path load balancing: four flows must share a
+common bottleneck corridor, and the optimal routing requires distributing them
+across five outgoing links at a hub node. ScaIR takes roughly 800 episodes to
+converge rather than 300, but reaches the same 5\% relative gap from the
+Oracle. This is encouraging: the algorithm scales to harder coordination
+problems, though the training cost grows.
+
+One limitation of the current implementation is the treatment of topology
+changes. When a link is removed, the affected agents' Q-networks are reset to
+random weights (simulating a router reboot), while the GNN representation is
+retained. This is a conservative choice that produces valid but pessimistic
+zero-shot results; keeping the trained Q-network weights would likely improve
+immediate post-change performance, since the remaining neighbours' Q-value
+outputs are unaffected by the removal of one interface.
+
+
+\section{Conclusion}
+
+We have presented a systematic evaluation of ScaIR across four real network
+topologies, an ablation study, an optimality comparison, and a harder
+multi-hotspot scenario. The main takeaways are the following. Under congested
+traffic, ScaIR consistently reduces average delivery time by 40--80\% over
+OSPF, with larger gains on larger topologies. The sub-GNN does not drive these
+gains: UCB-trained Q-networks with fixed one-hot node encodings achieve equal
+or better performance within 300 training episodes. On single-hotspot traffic
+at $D_r = 0.6$, the gap between ScaIR and an Oracle Greedy baseline is 4--5\%
+of the baseline delivery time---most of the available improvement is already
+captured. Multi-hotspot traffic, where four flows compete for the same
+bottleneck corridor, is genuinely harder: convergence requires 800 episodes,
+but the algorithm still reaches within 5\% of the Oracle.
+
+Future work should investigate longer training on richer topologies (100+
+nodes), the effect of varying the episode budget specifically for the GNN
+component to determine at what scale learned topology features begin to
+outperform static ones, and more realistic traffic models drawn from
+time-varying real TM traces rather than the stationary mixture used here.
+
+{\small
+\bibliographystyle{ieee_fullname}
+\begin{thebibliography}{9}
+
+\bibitem{dijkstra1959}
+E.~W. Dijkstra.
+\newblock A note on two problems in connexion with graphs.
+\newblock {\em Numerische Mathematik}, 1:269--271, 1959.
+
+\bibitem{boyan1994}
+J.~A. Boyan and M.~L. Littman.
+\newblock Packet routing in dynamically changing networks: A reinforcement
+  learning approach.
+\newblock In {\em Advances in Neural Information Processing Systems (NIPS)},
+  pages 671--678, 1994.
+
+\bibitem{mukhutdinov2019}
+D.~Mukhutdinov, A.~Filchenkov, A.~Shalyto, and V.~Vyatkin.
+\newblock Multi-agent deep learning for simultaneous optimization for time and
+  energy in distributed routing system.
+\newblock {\em Future Generation Computer Systems}, 94:587--600, 2019.
+
+\bibitem{you2020}
+X.~You, X.~Li, Y.~Xu, H.~Feng, J.~Zhao, and H.~Yan.
+\newblock Toward packet routing with fully distributed multiagent deep
+  reinforcement learning.
+\newblock {\em IEEE Transactions on Systems, Man, and Cybernetics}, 52(2):855--868, 2020.
+
+\bibitem{scair2025}
+J.~Zhang, J.~Guan, K.~Liu, Y.~Hu, A.~Shen, and Y.~Ma.
+\newblock {ScaIR}: Scalable intelligent routing based on distributed graph
+  reinforcement learning.
+\newblock {\em Computer Networks}, 257:110915, 2025.
+
+\bibitem{knight2011}
+S.~Knight, H.~X. Nguyen, N.~Falkner, R.~Bowden, and M.~Roughan.
+\newblock The internet topology zoo.
+\newblock {\em IEEE Journal on Selected Areas in Communications},
+  29(9):1765--1775, 2011.
+
+\bibitem{sndlib}
+S.~Orlowski, R.~Wess{\"a}ly, M.~Pi{\'o}ro, and A.~Tomaszewski.
+\newblock {SNDlib} 1.0---survivable network design library.
+\newblock {\em Networks}, 55(3):276--286, 2010.
+
+\end{thebibliography}
+}
+
+\end{document}
