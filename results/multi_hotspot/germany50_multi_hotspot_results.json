@@ -1,0 +1,42 @@
+{
+  "topology": "germany50",
+  "hotspot_pairs": [
+    [
+      5,
+      24
+    ],
+    [
+      49,
+      28
+    ],
+    [
+      25,
+      45
+    ],
+    [
+      13,
+      22
+    ]
+  ],
+  "dr_total": 0.6,
+  "dr_per_pair": 0.15,
+  "train_episodes": 300,
+  "eval_episodes": 50,
+  "packets_per_episode": 100,
+  "no_congestion_lb": {
+    "mean": 3.477,
+    "std": 0.11349449325848368
+  },
+  "oracle_greedy": {
+    "mean": 3.9632000000000005,
+    "std": 0.1850344832727133
+  },
+  "scair": {
+    "mean": 4.4336383298586535,
+    "std": 0.3230559797653574
+  },
+  "ospf": {
+    "mean": 4.3318,
+    "std": 0.29731256280217966
+  }
+}
