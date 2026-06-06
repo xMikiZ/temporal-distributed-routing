@@ -1,0 +1,112 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Include other packages here, before hyperref.
+
+% If you comment hyperref and then uncomment it, you should delete
+% egpaper.aux before re-running latex.  (Or just hit 'q' on the first latex
+% run, let it finish, and you should be clear).
+\usepackage[breaklinks=true,bookmarks=false]{hyperref}
+
+\cvprfinalcopy % *** Uncomment this line for the final submission
+
+\def\cvprPaperID{****} % *** Enter the CVPR Paper ID here
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+% Pages are numbered in submission mode, and unnumbered in camera-ready
+%\ifcvprfinal\pagestyle{empty}\fi
+\setcounter{page}{4321}
+\begin{document}
+
+%%%%%%%%% TITLE
+\title{Temporal distributed routing}
+
+\author{Miquel Ainaud\\
+{\tt\small miquel.ainaud@estudiantat.upc.edu}
+% For a paper whose authors are all at the same institution,
+% omit the following lines up until the closing ``}''.
+% Additional authors and addresses can be added with ``\and'',
+% just like the second author.
+% To save space, use either the email address or home page, not both
+\and
+Josep Vidal\\
+{\tt\small josep.vidal@upc.edu}
+}
+
+\maketitle
+%\thispagestyle{empty}
+
+%%%%%%%%% ABSTRACT
+\begin{abstract}
+
+\end{abstract}
+
+%%%%%%%%% BODY TEXT
+\section{Introduction}
+\subsection{The routing problem}
+
+Briefly explain what the routing problem consists on: can be loosely based in some of the papers seen.
+It has the objective of minimizing quantities such as average end to end packet delay or maximize throughput
+
+During the last years, the tendency has been to tackle the routing problem using techniqes from RL. Moreover, because of the inherent graph structure of the routers, the idea of using GNNs has been proposed by several authors. Examples of such implementations can be found in [UPC paper] [REF], AutoGNN [REF], STRL [REF] and ScaIR [REF].
+There are different tendencies to attack and formulate the problem. We can defined a centralized RL approach based on Software Defined Networking or use a multiagant framework via a distributed approach, like ScaIR.
+
+\subsection{STRL and ScaIR: an overview}
+Very briefly explain what STRL brings to the table and why interesting: because the non-markovian of the data signals. In the same paper, they talk about implementing a distributed approach for better scaling.
+So: based on the ScaIR paper, which is distriubted approach, the idea was to implement some of the proposed structure of STRL. Because of its simplicity, we could add GAT, also the temporality.
+
+However, after conducting some experiments on the GAT approach and consequential, we saw that there is a flaw in the way the GNN is presented in the ScaIR architecture
+
+
+%-------------------------------------------------------------------------
+
+\section{The ScaIR architecture}
+
+Explain the basic architecture of ScaIR. Is a distributed model, where each node has the same architecture as the others but with independent nodes. For each apcket, an agent takes a decision on where to forward it...
+Each agent / node has a GNN and a Q-Network. As the authors frame it, the Q-network saves info about the topology of the graph:
+
+(equations of GNN )
+
+Then, the output of GNN g(Vn) is passed as the input of the Q-Network, together with the packet destination, queues of the neighbours and history of actions. THIS IS THE STATE! DEFINE BETTER
+
+In contrary to other framweworks like [UPC] or [AutoGNN], here the full forwarding procedure is done via ML algorihm, not using a Dijstra at the end (això és dif que està guais)
+
+ASSUMPTIONS: we are working in an enviromnet where packets arrive, then each agent has to forward, based on queue etc that might cause congestion. No link weights, no extra info added,.
+
+
+\section{Experiments, Results and Analysis}
+[Subdivide in subsections?]
+Basically we test on four different topologies. important to test functioning on different scenarios and graph shapes (classica Abilene and Geant are used in ScaIR, GER50 has maaany more nodes and the other one BRAIN is just ok. extracted from network topology zoo and SNDlib).
+
+We started by implementing straighforward changes -> UCB. ¿Also shared weights experiments, maybe add it? and Attention (dot prod, learned dot prod etc.). We saw that for the latter we got these results ... and this drives the question: why is the same?
+
+Answer: this is KEY INSIGHT! because the Vn only codify things about neighbours! Attnetion (imagined as raw dot prod) measures how similar I am from neighbour. Not relevant at all! We prove this by testing experiments where we directly dont' use GNN and put as input to Q-network a one hot or Nbrm etc. This implies that the authors had gone directly for a more complicated approach but first you have to try simpler steps.
+
+Naturally, after this we thought: ok, so initialise differently the Vn so its not just about superlocal info (instead of global topology): we initialise not one-hot but with degrees of its neighbours (or betweeness, etc.). We see the exact same results
+
+WE SHOULD HAVE TABLES AND PLOTS IN THIS SECTION
+
+també topology changes etc.
+
+
+
+\section{Conclusions and Future Work}
+
+Explain the conclusions we got from this.
+
+We saw there is a flaw in the implementation sincd GNN does not work interestengly... etc
+
+Future work should be to frame the problem in a more complicated routing sense and see what happens if we add link weights, etc. Also remove one-hots from everywere? It
+
+{\small
+\bibliographystyle{ieee_fullname}
+\bibliography{egbib}
+}
+
+\end{document}

@@ -1,0 +1,13 @@
+\section{Experiments, Results and Analysis}
+[Subdivide in subsections?]
+Basically we test on four different topologies. important to test functioning on different scenarios and graph shapes (classica Abilene and Geant are used in ScaIR, GER50 has maaany more nodes and the other one BRAIN is just ok. extracted from network topology zoo and SNDlib).
+
+We started by implementing straighforward changes -> UCB. ¿Also shared weights experiments, maybe add it? and Attention (dot prod, learned dot prod etc.). We saw that for the latter we got these results ... and this drives the question: why is the same?
+
+Answer: this is KEY INSIGHT! because the Vn only codify things about neighbours! Attnetion (imagined as raw dot prod) measures how similar I am from neighbour. Not relevant at all! We prove this by testing experiments where we directly dont' use GNN and put as input to Q-network a one hot or Nbrm etc. This implies that the authors had gone directly for a more complicated approach but first you have to try simpler steps.
+
+Naturally, after this we thought: ok, so initialise differently the Vn so its not just about superlocal info (instead of global topology): we initialise not one-hot but with degrees of its neighbours (or betweeness, etc.). We see the exact same results
+
+WE SHOULD HAVE TABLES AND PLOTS IN THIS SECTION
+
+també topology changes etc.

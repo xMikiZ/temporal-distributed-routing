@@ -1,0 +1,133 @@
+{
+  "config": {
+    "dr_values": [
+      0.0,
+      0.2,
+      0.4,
+      0.6,
+      0.8
+    ],
+    "train_episodes": 300,
+    "eval_episodes": 50,
+    "n_packets": 100,
+    "seed": 42,
+    "action_method": "epsilon_greedy"
+  },
+  "results": {
+    "0.0": {
+      "ospf": {
+        "avg_delivery_time": 4.1495999999999995,
+        "avg_hops": 1.7904,
+        "delivery_rate": 1.0
+      },
+      "onehot_pernode": {
+        "avg_delivery_time": 2.5964,
+        "std_delivery_time": 0.27996971264763626
+      },
+      "onehot_sharedq": {
+        "avg_delivery_time": 2.608,
+        "std_delivery_time": 0.29167104758614626
+      },
+      "nbrmask_pernode": {
+        "avg_delivery_time": 2.6116,
+        "std_delivery_time": 0.2863589356035533
+      },
+      "nbrmask_sharedq": {
+        "avg_delivery_time": 2.634,
+        "std_delivery_time": 0.27982851891828325
+      }
+    },
+    "0.2": {
+      "ospf": {
+        "avg_delivery_time": 2.7474000000000003,
+        "avg_hops": 1.6286,
+        "delivery_rate": 1.0
+      },
+      "onehot_pernode": {
+        "avg_delivery_time": 2.3968,
+        "std_delivery_time": 0.1971135713237422
+      },
+      "onehot_sharedq": {
+        "avg_delivery_time": 2.3708,
+        "std_delivery_time": 0.2580452673466421
+      },
+      "nbrmask_pernode": {
+        "avg_delivery_time": 2.3442000000000003,
+        "std_delivery_time": 0.23759705385378835
+      },
+      "nbrmask_sharedq": {
+        "avg_delivery_time": 2.3608,
+        "std_delivery_time": 0.20824831331849963
+      }
+    },
+    "0.4": {
+      "ospf": {
+        "avg_delivery_time": 3.3972,
+        "avg_hops": 1.4753999999999998,
+        "delivery_rate": 1.0
+      },
+      "onehot_pernode": {
+        "avg_delivery_time": 2.3676000000000004,
+        "std_delivery_time": 0.21258936944259466
+      },
+      "onehot_sharedq": {
+        "avg_delivery_time": 2.3544,
+        "std_delivery_time": 0.17865228797863184
+      },
+      "nbrmask_pernode": {
+        "avg_delivery_time": 2.3246,
+        "std_delivery_time": 0.16961379660864856
+      },
+      "nbrmask_sharedq": {
+        "avg_delivery_time": 2.3823999999999996,
+        "std_delivery_time": 0.18795276002229921
+      }
+    },
+    "0.6": {
+      "ospf": {
+        "avg_delivery_time": 7.443000000000001,
+        "avg_hops": 1.3166,
+        "delivery_rate": 1.0
+      },
+      "onehot_pernode": {
+        "avg_delivery_time": 2.6238,
+        "std_delivery_time": 0.2895506173365893
+      },
+      "onehot_sharedq": {
+        "avg_delivery_time": 2.5794,
+        "std_delivery_time": 0.22859930008641757
+      },
+      "nbrmask_pernode": {
+        "avg_delivery_time": 2.6218,
+        "std_delivery_time": 0.35000394283493436
+      },
+      "nbrmask_sharedq": {
+        "avg_delivery_time": 2.6913999999999993,
+        "std_delivery_time": 0.28743701918855197
+      }
+    },
+    "0.8": {
+      "ospf": {
+        "avg_delivery_time": 16.2448,
+        "avg_hops": 1.1518000000000002,
+        "delivery_rate": 1.0
+      },
+      "onehot_pernode": {
+        "avg_delivery_time": 3.3904,
+        "std_delivery_time": 0.4861932126223072
+      },
+      "onehot_sharedq": {
+        "avg_delivery_time": 3.2998000000000003,
+        "std_delivery_time": 0.4716036047360114
+      },
+      "nbrmask_pernode": {
+        "avg_delivery_time": 3.222,
+        "std_delivery_time": 0.44980884829002643
+      },
+      "nbrmask_sharedq": {
+        "avg_delivery_time": 3.2806000000000006,
+        "std_delivery_time": 0.43109817907293463
+      }
+    }
+  }
+}

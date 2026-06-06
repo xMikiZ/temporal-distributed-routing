@@ -1,0 +1,854 @@
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+\usepackage{cvpr}
+\usepackage{times}
+\usepackage{epsfig}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+
+\usepackage[breaklinks=true,bookmarks=false]{hyperref}
+
+\cvprfinalcopy
+
+\def\cvprPaperID{****}
+\def\httilde{\mbox{\tt\raisebox{-.5ex}{\symbol{126}}}}
+
+\setcounter{page}{1}
+\begin{document}
+
+\title{On the Role of Graph Neural Networks in Distributed\\
+Reinforcement Learning for Packet Routing}
+
+\author{Miquel Ainaud\\
+{\tt\small miquel.ainaud@estudiantat.upc.edu}
+\and
+Josep Vidal\\
+{\tt\small josep.vidal@upc.edu}
+}
+
+\maketitle
+
+\begin{abstract}
+We implement and study ScaIR, a distributed multi-agent reinforcement
+learning algorithm for packet routing that uses a per-node sub-GNN to
+produce topology-aware feature vectors as input to a Q-network. Our
+starting goal was to extend ScaIR with more expressive aggregation
+mechanisms such as graph attention, inspired by similar ideas in recent
+work on spatiotemporal routing. Instead, we ended up finding something
+more fundamental: the GNN component does not contribute meaningfully to
+routing quality. Replacing it entirely with a fixed one-hot node identifier
+or a static neighbour connectivity mask achieves equal or better
+performance across all topologies tested. The reason is structural: since
+$\mathbf{V}_n$ is initialised from a one-hot vector and the GNN has no
+access to delays, traffic load, or any physical network information, the
+learned feature vectors converge to a transformation of node identity
+rather than a representation of topology. This explains both why removing
+the GNN does not hurt, and why the model fails badly when a new node is
+added to the network---it simply has no way to assign a meaningful
+identity to an entity it has never seen. The actual gains over OSPF,
+which can reach 40--80\% under congested traffic, come from the
+multi-agent DQN and UCB exploration mechanism, not from the GNN. We
+discuss what these findings imply for the design of future
+topology-aware routing systems.
+\end{abstract}
+
+\section{Introduction}
+
+\subsection{The routing problem}
+
+Packet routing is one of the core tasks in any communication network.
+When a packet arrives at a router, the router has to decide which
+neighbour to forward it to, with the goal of getting it to its
+destination as fast as possible. Traditionally this is solved with
+protocols like OSPF, which precomputes the shortest path to every
+destination using Dijkstra's algorithm \cite{dijkstra1959}. This works
+well when traffic is spread evenly across the network, but breaks down
+when certain source--destination pairs concentrate a lot of demand:
+OSPF will route everything along the same shortest path, which
+saturates, while alternative routes that could share the load remain
+idle. Minimising average end-to-end packet delay---or equivalently
+maximising throughput---under these conditions is a hard combinatorial
+problem that depends on the instantaneous state of every queue in the
+network, which OSPF simply does not consider.
+
+Over the last few years, reinforcement learning has emerged as a natural
+way to tackle this. A router modelled as an RL agent can learn, through
+trial and error, to route packets around congested areas by observing
+local queue lengths and adjusting its forwarding decisions online. The
+combination of RL with graph neural networks (GNNs) has attracted
+particular interest, since the network is inherently a graph and GNNs
+offer a principled way to aggregate information from neighbours and
+encode topology structure \cite{survey_gnn_drl}. Several works have
+explored this idea from different angles: some adopt a centralised
+software-defined networking approach where a single controller collects
+global state and computes routing decisions for the whole network
+\cite{upc_routing}, while others look at hybrid or automatic
+architecture search to find the right GNN structure for a given network
+scenario \cite{autognn}. The consensus is that RL-based routing can
+outperform OSPF under congestion, and that incorporating some form of
+graph-based feature extraction helps.
+
+The approach we focus on in this work, ScaIR \cite{scair2025}, is a
+fully distributed system: each router is an independent agent with its
+own sub-GNN and Q-network, and the only communication between agents is
+the exchange of feature vectors with direct neighbours. This avoids any
+centralised coordinator and scales naturally with network size, which
+makes it an attractive design for large real-world deployments.
+
+\subsection{From STRL to ScaIR: the starting point of this work}
+
+One of the papers that motivated this project is STRL
+\cite{strl}, which proposes a spatiotemporal RL approach to routing. A
+key observation in that work is that the routing problem is
+non-Markovian: the delivery time of a packet depends not just on the
+current state of the queues but also on recent history, since congestion
+builds up and dissipates over time. STRL addresses this by incorporating
+temporal features into the state representation, and it also advocates
+for a distributed deployment model to improve scalability.
+
+ScaIR \cite{scair2025} shares the distributed philosophy but takes a
+different angle on global awareness: instead of temporal features, it
+uses a GNN to give each agent a compressed summary of the neighbourhood
+topology. The architecture is deliberately simple---a two-layer MLP for
+each of the GNN update and output functions, with no attention
+mechanisms or learnable aggregation weights. Our initial plan was to
+improve this by adding graph attention (GAT-style) to the GNN
+aggregation, following ideas from STRL and AutoGNN \cite{autognn}, and
+to explore whether temporal features from the packet history could also
+help. As we will describe, the experiments pushed us in a different
+direction: they revealed that the GNN itself is not doing what the
+architecture claims, and that fixing this is a more fundamental
+challenge than adding attention on top of it.
+
+\section{The ScaIR Architecture}
+\label{sec:arch}
+
+ScaIR~\cite{scair2025} is a fully distributed multi-agent routing
+system. Each router in the network is an independent
+\emph{intelligent router} (IRr): it holds its own neural network
+weights and takes all forwarding decisions autonomously, with no
+centralised controller. The only inter-agent communication is the
+periodic exchange of compressed feature vectors between one-hop
+neighbours. The global optimisation objective is to minimise the mean
+packet delivery time across all packets in an episode:
+\begin{equation}
+  \min \;\frac{1}{P_n}\sum_{p \in P} t_p,
+  \label{eq:obj}
+\end{equation}
+where $P$ is the set of packets and $t_p$ is the total time from
+generation to delivery for packet $p$.
+
+\subsection{Per-agent architecture: sub-GNN and Q-network}
+
+Each agent $n$ has two jointly-trained components: a sub-GNN
+($N_{Gsub}$) and a Q-network ($N_Q$).
+
+\textbf{Sub-GNN ($N_{Gsub}$).} Each node $n$ maintains a hidden
+feature vector $V_n$, initialised as a one-hot encoding of its integer
+router identifier $R_n$, zero-padded to feature length $F_l$. The
+feature vector is updated iteratively by exchanging representations
+with one-hop neighbours:
+\begin{align}
+  V_n^{(t)} &= f_{w_n}\!\bigl(
+    V_n^{(t-1)},\;\{V_j^{(t-1)}\}_{j \in N_n}
+  \bigr), \label{eq:gnn} \\
+  o_n &= g_{w_n}(V_n^{(K)}), \label{eq:out}
+\end{align}
+where $f_{w_n}(\cdot)$ updates the hidden representation of node $n$
+using the representations of its one-hop neighbours $N_n$,
+$g_{w_n}(\cdot)$ maps the final hidden state to the output feature
+space, and $K$ is the number of message-passing iterations. Both
+$f_{w_n}$ and $g_{w_n}$ are feedforward networks. The paper does not
+specify how the neighbour representations $\{V_j\}_{j \in N_n}$ are
+aggregated inside $f_{w_n}$; we describe our implementation choices in
+Section~\ref{sec:experiments}. After $K$ iterations, the output $o_n$
+is a compressed representation of the global network topology as seen
+from node $n$.
+
+\textbf{Q-network ($N_Q$).} When processing packet $p$, agent $n$
+observes the state
+\begin{equation}
+  S_n = \{d_p,\; O_n,\; K_n\},
+  \label{eq:state}
+\end{equation}
+where $d_p$ is the destination of the packet (encoded as a one-hot
+vector), $O_n$ is the local observation comprising queue lengths and
+action history for each outgoing interface, and $K_n = o_n$ is the
+sub-GNN output representing global topology characteristics. The
+Q-network maps $S_n$ to one Q-value per neighbour; the agent forwards
+the packet to the neighbour with the minimum estimated delivery cost.
+As the exploration policy, ScaIR uses a $\sigma$-greedy strategy: with
+probability $\sigma$ the agent selects a random neighbour from $A_n$;
+otherwise it acts greedily and forwards to the neighbour with the
+minimum Q-value.
+
+For training, each agent $n$ maintains a replay buffer $D_n$ that
+accumulates the transitions $(s_t, a_t, c_t, s_{t+1})$ observed during
+routing. Every $L_c$ forwarding decisions a random mini-batch is
+sampled from $D_n$ to update the network parameters. Because the
+Q-value $Q_n(s, a;\theta_n, g_n)$ is interpreted as the estimated total
+delivery time if agent $n$ takes action $a$ in state $s$, the
+regression target for each transition is built as the sum of the
+immediate cost and the best estimated future cost from the next agent:
+\begin{equation}
+  y = c_t + \gamma\,\hat{Q}(s_{t+1}, a^*;\hat{\theta}_n, \hat{g}_n),
+  \label{eq:target}
+\end{equation}
+where $c_t = q + h$ is the immediate forwarding cost (queuing time $q$
+plus per-hop transmission delay $h$), $\gamma$ is the discount factor,
+and $\hat{Q}$ is a periodically frozen copy of the Q-network used as
+a target network to stabilise training. The parameters of both
+$N_{Gsub}$ (denoted $g_n$) and $N_Q$ (denoted $\theta_n$) are then
+updated jointly by minimising the loss
+\begin{equation}
+  L_t = \bigl(y - Q_n(s_t, a_t;\theta_n, g_n)\bigr)^2.
+  \label{eq:loss}
+\end{equation}
+Differentiating $L_t$ with respect to both $\theta_n$ and $g_n$ and
+applying gradient descent simultaneously refines the routing policy and
+the GNN feature extractor.
+
+\subsection{Fully learned forwarding}
+
+A defining property of ScaIR is that the routing decision is made
+entirely by the Q-network, with no shortest-path solver involved at any
+stage. This sets it apart from hybrid frameworks such as
+\cite{upc_routing} and \cite{autognn}, where neural networks produce
+per-link cost estimates or embeddings that are then fed into a
+Dijkstra-based solver to compute the actual forwarding path. In those
+approaches the learned component shapes the cost surface, but path
+selection remains a graph search. In ScaIR, $N_Q$ directly outputs a
+next-hop action for each packet based on the current state $S_n$;
+there is no graph search step at inference time.
+
+\subsection{Simulation assumptions}
+
+The environment used in both the original paper and our replication
+makes three key simplifying assumptions. First, all links are
+identical: there are no per-link weights, bandwidth capacities, or
+heterogeneous propagation delays. Second, the only source of variable
+latency is queue occupancy. The immediate forwarding cost is $c_t = q
++ h$, where $q$ is the number of packets currently queued ahead on the
+chosen interface (each contributing $1$\,ms of delay) and $h = 1$\,ms
+is a fixed per-hop transmission time. Third---and most relevant to our
+findings---the sub-GNN receives no information about queue lengths,
+traffic load, or link properties; the only input flowing into the GNN
+is node identity through the one-hot initialisation. Queue and traffic
+information enter the Q-network separately through $O_n$. These
+simplifications keep the simulation tractable but, as we argue below,
+they strongly limit what the GNN can usefully learn to represent.
+
+\subsection{Datasets}
+
+We experiment on four real backbone networks. \textbf{Abilene} (11
+nodes, 14 links) and \textbf{GEANT} (23 nodes, 37 links) are the same
+topologies used in the original ScaIR paper, with traffic matrices from
+the Internet2 and GEANT projects. We additionally include \textbf{BRAIN}
+(9 nodes after collapsing the 161-node Berlin backbone to its core
+routers, with 8619 one-minute TMs from SNDlib) and \textbf{Germany50}
+(50 nodes, 288 five-minute TMs from SNDlib \cite{sndlib}). Testing on
+different topology sizes and TM characteristics matters because what
+looks like a good result on a small network may not hold at scale, and
+the BRAIN and Germany50 TMs already have concentrated demand without any
+artificial hot-spot injection.
+
+\section{Experiments, Results, and Analysis}
+\label{sec:experiments}
+
+The central question we investigate is whether the sub-GNN in ScaIR
+provides meaningful topology information to the Q-network, or whether
+simpler static representations of the network achieve equal or better
+routing quality. We will show that the GNN output $o_n$ encodes little
+more than a transformed node identity: it is not learning a topology
+representation, and replacing it with a one-hot vector or a static
+connectivity mask delivers the same performance across all topologies
+and congestion levels tested.
+
+To build this case, we report the following experiments in order:
+\begin{itemize}
+  \item \textbf{Shared weights.} Replacing per-agent GNN parameter sets
+    with a single shared set across all agents. If the GNN encodes
+    topology structure, per-node specialisation should matter; if it
+    encodes identity, sharing should be largely free.
+  \item \textbf{Attention aggregation.} Replacing mean aggregation inside
+    the GNN update with dot-product and learnable attention,
+    motivated by related work on graph-based
+    routing~\cite{strl,autognn}. Selective neighbour weighting should
+    improve the topology encoding if the features carry routing-relevant
+    content.
+  \item \textbf{Removing the GNN.} Replacing the learned sub-GNN
+    entirely with a fixed, non-trained vector (one-hot node identifier
+    or neighbour connectivity mask) fed directly into the Q-network.
+  \item \textbf{Alternative initialisation.} Seeding $V_n$ with
+    structural topology properties (degree, betweenness centrality)
+    rather than one-hot identifiers~\cite{init_ref1,init_ref2}, to test
+    whether richer initial features allow the GNN to converge to a
+    routing-useful encoding.
+  \item \textbf{Topology resilience.} Evaluating trained agents after
+    structural network changes (node/link additions and removals), to
+    examine the operational consequences of identity-based
+    representations.
+\end{itemize}
+
+\subsection{Datasets and Experimental Setup}
+\label{sec:setup}
+
+\subsubsection{Topologies}
+
+We evaluate on four real backbone networks. \textbf{Abilene} (11~nodes,
+14~links) is the Internet2 US backbone and \textbf{GEANT} (23~nodes,
+37~links) is the pan-European research network; both topologies and
+their traffic matrices are used in the original ScaIR
+paper~\cite{scair2025}, allowing a direct cross-check of our
+implementation. Topology files and TMs were obtained from the GitHub
+repository provided in the ScaIR paper.
+
+\textbf{BRAIN} and \textbf{Germany50} come from
+SNDlib~\cite{sndlib}. The BRAIN instance has 161 nodes, but 152 are
+subnet nodes each connected by a single uplink with no routing choice,
+so we collapse to the 9 backbone core routers and aggregate the 8619
+one-minute TMs accordingly. Germany50 (50~nodes) is the DFN German
+national backbone, with 288 five-minute TMs. These two topologies serve
+a dual purpose: their structurally different connectivity patterns and
+larger scales let us verify that findings from Abilene and GEANT
+generalise, and their real-world TMs carry more concentrated demand,
+making them naturally harder for OSPF without artificial injection.
+
+\subsubsection{Traffic generation and distribution ratio}
+
+We follow the ScaIR traffic model. At the start of each episode, $P_n$
+packets are initialised at source nodes with source--destination pairs
+sampled proportional to a traffic matrix $\mathbf{T}$. A fraction $D_r$
+of packets is additionally forced onto a fixed hot-spot pair (the
+\emph{distribution ratio}), and we sweep $D_r \in \{0.0, 0.2, 0.4,
+0.6, 0.8\}$.
+
+Sweeping $D_r$ traces the transition from near-uniform load, where
+OSPF's static shortest-path routing is already close to
+optimal~\cite{scair2025}, to severely congested conditions where
+hot-spot links saturate and delay compounds across hops. Reinforcement
+learning-based routing provides its advantage in the congested regime:
+the Q-network learns to distribute load over longer but less-loaded
+alternatives that OSPF ignores. The primary baseline throughout is OSPF
+with unit link weights.
+
+\subsubsection{Common hyperparameters}
+
+Table~\ref{tab:hyper} lists the parameters common to all experiments.
+Values follow the ScaIR paper where specified; deviations are noted per
+experiment.
+
+\begin{table}[t]
+\centering
+\caption{Common hyperparameters for all experiments.}
+\label{tab:hyper}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lll}
+\toprule
+Parameter & Symbol & Value \\
+\midrule
+Feature vector length      & $F_l$             & 128 \\
+GNN warm-up iterations     & $K$               & 8 \\
+GNN periodic update iters  & $I_n$             & 3 \\
+GNN update period (ticks)  & $T_{\rm GNN}$     & 10 \\
+Q-net learning rate        & $L_r$             & $10^{-3}$ \\
+GNN learning rate          & $L_r^{\rm GNN}$   & $10^{-4}$ \\
+Replay buffer size         & $M_s$             & 200 \\
+Batch size                 & $B_s$             & 64 \\
+Learning cycle             & $L_c$             & 10 \\
+Packets per episode        & $P_n$             & 50 \\
+Packet inter-arrival time  & $G_i$             & 0.5\,ms \\
+Discount factor            & $\gamma$          & 1.0 \\
+Distribution ratios        & $D_r$             & \{0.0, 0.2, 0.4, 0.6, 0.8\} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Baseline performance}
+
+Before examining the GNN's contribution we verify that our
+implementation is correct. Table~\ref{tab:main} shows average delivery
+time for the standard ScaIR variant (per-node GNN, mean aggregation,
+$\sigma$-greedy exploration, 300~episodes) against OSPF across all four
+topologies. Gains under heavy congestion are substantial and consistent
+with the original paper: up to 81\% on BRAIN and around 76\% on GEANT
+and Germany50 at $D_r = 0.8$. On Abilene with near-uniform Internet2
+traffic, OSPF wins at $D_r = 0.0$ because there is no congestion for a
+learned policy to exploit. On BRAIN and Germany50, ScaIR wins even at
+$D_r = 0.0$ because those TMs already carry concentrated demand.
+
+\begin{table}[h]
+\centering
+\caption{ScaIR (per-node GNN, $\sigma$-greedy, 300~episodes) vs.\
+OSPF at two representative distribution ratios.}
+\label{tab:main}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llccc}
+\toprule
+Topology & $D_r$ & OSPF (ms) & ScaIR (ms) & Gain \\
+\midrule
+\multirow{2}{*}{Abilene (11)} & 0.0 & 3.35 & 3.52 & $-5\%$ \\
+ & 0.8 & 16.20 & 6.89 & $+57\%$ \\
+\midrule
+\multirow{2}{*}{BRAIN (9)} & 0.0 & 4.15 & 2.30 & $+44\%$ \\
+ & 0.8 & 15.52 & 3.01 & $+81\%$ \\
+\midrule
+\multirow{2}{*}{GEANT (23)} & 0.0 & 2.92 & 2.74 & $+6\%$ \\
+ & 0.8 & 22.87 & 5.42 & $+76\%$ \\
+\midrule
+\multirow{2}{*}{Germany50 (50)} & 0.0 & 4.89 & 4.13 & $+15\%$ \\
+ & 0.8 & 28.03 & 6.77 & $+76\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Shared Weights}
+\label{sec:shared}
+
+In the standard ScaIR architecture each agent $n$ maintains independent
+GNN parameters $w_n$. A natural simplification is to share a single
+parameter set $w$ across all agents while keeping each node's feature
+vector $V_n$ independent. Shared weights reduce the parameter count,
+increase effective gradient throughput (each update aggregates signal
+from all agents), and simplify deployment. If per-node specialisation of
+$w_n$ is important --- for instance because the GNN is learning
+node-specific topology structure --- sharing should hurt performance.
+
+We train both variants for 300~episodes with $\sigma$-greedy
+exploration ($\sigma = 0.9$, decaying by $0.05$ every 10~episodes to a
+floor of $0.1$) on all four topologies. Figure~\ref{fig:variants} shows
+the $D_r$ sweep on Germany50, the topology where differences between
+variants are most visible; Abilene and BRAIN are qualitatively identical
+(max spread $< 0.3$\,ms at any $D_r$).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/04_germany50_ucb/comparison_dr_sweep.png}
+\caption{$D_r$ sweep on Germany50 (50~nodes, 300~episodes,
+$\sigma$-greedy) for per-node and shared-weight variants, with mean and
+dot-product attention aggregation. All variants converge to within
+0.7\,ms of each other; the shared-weight variants trail marginally at
+$D_r = 0.8$.}
+\label{fig:variants}
+\end{figure}
+
+Across Abilene and BRAIN the best and worst variants differ by at most
+0.3\,ms at any $D_r$, well within stochastic variance. On Germany50,
+shared-weight variants trail per-node by up to 0.7\,ms at $D_r = 0.8$
+--- a consistent but modest gap. Weight sharing is therefore a viable
+simplification that costs little in routing quality, which already
+suggests that per-node GNN specialisation is not a critical source of
+routing information.
+
+\subsection{Attention Aggregation}
+\label{sec:attn}
+
+If mean aggregation treats all neighbours as equally informative, one
+might expect attention-based aggregation to extract a richer topology
+representation by weighting more relevant neighbours more heavily. This
+is the intuition behind graph attention networks~\cite{velickovic2018}
+and motivates related routing works~\cite{strl,autognn}. We implement
+the GNN update using only neighbour feature vectors (following the
+paper's formulation):
+\begin{equation}
+  V_n^{(t)} = \mathrm{agg}\!\bigl(\{f_{w_n}(V_j^{(t-1)})\}_{j \in N_n}\bigr),
+  \label{eq:gnn-nbr}
+\end{equation}
+and substitute two attention variants for the mean aggregation.
+
+\textbf{Dot-product attention.} The weight of neighbour $j$ is:
+\begin{equation}
+  \alpha_j = \frac{
+    \exp\!\bigl(V_n^{(t-1)} \cdot f_{w_n}(V_j^{(t-1)}) / \sqrt{F_l}\bigr)
+  }{
+    \sum_{k \in N_n}\!\exp\!\bigl(V_n^{(t-1)} \cdot f_{w_n}(V_k^{(t-1)}) / \sqrt{F_l}\bigr)
+  },
+  \label{eq:dot-attn}
+\end{equation}
+and the update becomes $V_n^{(t)} = \sum_{j} \alpha_j f_{w_n}(V_j^{(t-1)})$.
+
+\textbf{Learnable attention.} A trainable query matrix
+$\mathbf{W}_q \in \mathbb{R}^{F_l \times F_l}$ forms the query:
+\begin{equation}
+  \alpha_j = \frac{
+    \exp\!\bigl((\mathbf{W}_q V_n^{(t-1)}) \cdot f_{w_n}(V_j^{(t-1)}) / \sqrt{F_l}\bigr)
+  }{
+    \sum_{k \in N_n}\!\exp\!\bigl((\mathbf{W}_q V_n^{(t-1)}) \cdot f_{w_n}(V_k^{(t-1)}) / \sqrt{F_l}\bigr)
+  }.
+  \label{eq:learn-attn}
+\end{equation}
+
+The attention variants appear in Figure~\ref{fig:variants} alongside
+the mean variants. On Abilene and BRAIN all four combinations
+(mean/dot-attn $\times$ per-node/shared) stay within 0.3\,ms of each
+other. On Germany50, per-node dot-product attention reaches 6.77\,ms at
+$D_r = 0.8$ versus 7.47\,ms for mean per-node --- the largest gap
+observed anywhere, yet still modest.
+
+The reason attention does not help is structural. The score in
+Eq.~\eqref{eq:dot-attn} measures the inner product between
+$V_n^{(t-1)}$ and the transformed neighbour vector. Since all feature
+vectors are initialised from one-hot node identifiers and updated
+exclusively from other such vectors, the score measures how similar two
+nodes' \emph{identities} are to each other --- not how routing-relevant
+a neighbour is. No queue lengths, link loads, or path distances ever
+enter the GNN; there is no routing-relevant content for the attention
+mechanism to discover. This observation motivates removing the GNN
+entirely.
+
+\subsection{Removing the GNN}
+\label{sec:nognn}
+
+If the aggregation scheme does not matter, is the GNN contributing
+anything at all? We test this directly by replacing the sub-GNN with a
+fixed, non-trainable vector of the same length $F_l = 128$, fed as
+$K_n$ directly into the Q-network. Only the Q-network trains. We use
+two encodings:
+\begin{itemize}
+  \item \textbf{OneHot}: $V_n = \mathbf{e}_n$, a unit vector at
+    position $n$. Pure node identity, no topology information.
+  \item \textbf{NbrMask}: $V_n$ is a binary vector with ones at the
+    indices of $n$'s direct neighbours. Encodes immediate connectivity
+    without any learned transformation.
+\end{itemize}
+
+Both encodings are combined with per-node and shared Q-networks, giving
+four no-GNN variants. For these experiments we use UCB exploration:
+\begin{equation}
+  a^* = \arg\min_a \!\left[
+    Q_n(S_n, a;\theta_n, g_n) - c\sqrt{\frac{\ln(N+1)}{n_a}}
+  \right],
+  \label{eq:ucb-full}
+\end{equation}
+where $N = \sum_a n_a$ is the total forwarding count for the current
+destination, $n_a$ is the per-action visit count, and $c = 2.0$.
+Unvisited actions are always explored first; counts are
+destination-specific and never reset across episodes. The GNN reference
+for this section also uses UCB, making the comparison clean.
+
+Figure~\ref{fig:nognn} shows the $D_r$ sweep on Germany50 and
+Table~\ref{tab:ablation} gives the numerical results.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/05_no_gnn_ger50/ablation_dr_sweep.png}
+\caption{No-GNN ablation on Germany50 (UCB, 300~episodes). All
+fixed-encoding variants match or outperform ScaIR-GNN at every
+$D_r$ value. The GNN adds optimisation complexity without improving
+routing quality.}
+\label{fig:nognn}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{No-GNN ablation on Germany50 (UCB, 300~episodes). Negative
+``vs.\ GNN'' values indicate the no-GNN variant is better.}
+\label{tab:ablation}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccc}
+\toprule
+ & \multicolumn{2}{c}{$D_r = 0.0$} &
+   \multicolumn{2}{c}{$D_r = 0.8$} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+Variant & ms & vs.\ GNN & ms & vs.\ GNN \\
+\midrule
+ScaIR-GNN (per-node) & 4.13 & --- & 6.77 & --- \\
+\midrule
+OneHot per-node  & 3.93 & $-4.9\%$ & 6.58 & $-2.8\%$ \\
+OneHot shared    & 3.94 & $-4.6\%$ & \textbf{6.18} & $-8.7\%$ \\
+NbrMask per-node & 3.96 & $-4.1\%$ & 6.63 & $-2.1\%$ \\
+NbrMask shared   & \textbf{3.92} & $-5.1\%$ & 6.37 & $-5.9\%$ \\
+\midrule
+OSPF             & 4.89 & $+18.5\%$ & 28.03 & $+314\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every no-GNN variant matches or outperforms ScaIR-GNN at both
+congestion levels. The best (OneHot shared-Q) beats it by 8.7\% at
+$D_r = 0.8$; the same holds on BRAIN (9~nodes), where no-GNN variants
+differ from the GNN reference by at most 0.18\,ms. The GNN not only
+fails to help --- it slightly hurts performance within a 300-episode
+budget, most likely because the coupled optimisation of $f_{w_n}$,
+$g_{w_n}$, and $N_Q$ introduces gradient instability that a fixed
+encoding avoids. The actual routing signal is in the local observations
+$O_n$ (queue lengths and action history), which bypass the GNN.
+
+\subsection{Alternative Initialisation}
+\label{sec:altinit}
+
+A natural objection is that the issue lies not in the GNN architecture
+but in the one-hot initialisation: a $V_n$ seeded from a pure identity
+vector will inevitably converge to an identity-like encoding. Perhaps
+seeding $V_n$ with structural topology properties would allow the GNN to
+learn routing-relevant representations, as explored in graph
+representation learning works~\cite{init_ref1,init_ref2}.
+
+We test this by initialising $V_n$ with two topology-derived scalars
+(zero-padded to $F_l$):
+\begin{itemize}
+  \item \textbf{Degree}: $V_n^{(0)}[0] = \deg(n) / \max_k \deg(k)$.
+  \item \textbf{Betweenness}: additionally $V_n^{(0)}[1] = \mathrm{BC}(n)$
+    (normalised betweenness centrality).
+\end{itemize}
+
+Each initialisation is combined with the three aggregation schemes from
+Section~\ref{sec:attn} (mean, dot-attention, learnable~attention),
+giving six GNN variants. We also include two no-GNN baselines that feed
+the topology vector directly to the Q-network without message passing
+(\texttt{deg\_fixed}, \texttt{bet\_fixed}), for nine variants in total.
+All are trained for 200~episodes with UCB on all four topologies at
+$D_r \in \{0.0, 0.4, 0.8\}$.
+
+Figures~\ref{fig:init-ger50} and~\ref{fig:init-abi} show the results on
+Germany50 and Abilene; Table~\ref{tab:initspread} summarises the spread
+between best and worst variant per topology.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/09_topo_init/germany50_dr_sweep.png}
+\caption{Alternative initialisation sweep on Germany50 (UCB,
+200~episodes). All nine variants, including topology-derived
+initialisations and attention, land within 1\,ms of each other.}
+\label{fig:init-ger50}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/09_topo_init/abilene_dr_sweep.png}
+\caption{Alternative initialisation sweep on Abilene (UCB,
+200~episodes).}
+\label{fig:init-abi}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\caption{Spread (best minus worst delivery time in ms) across all nine
+variants per topology and $D_r$.}
+\label{tab:initspread}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccc}
+\toprule
+Topology  & $D_r = 0.0$ & $D_r = 0.4$ & $D_r = 0.8$ \\
+\midrule
+Abilene   & 0.055 & 0.118 & 0.414 \\
+GEANT     & 0.086 & 0.121 & 0.568 \\
+BRAIN     & 0.088 & 0.097 & 0.150 \\
+Germany50 & 0.352 & 0.473 & 1.037 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The spread between best and worst variant is 0.05--1.04\,ms across all
+settings. On Germany50 at $D_r = 0.8$ --- where a better topology
+encoding might plausibly matter --- the best performer is
+\texttt{deg\_fixed} (6.63\,ms), a no-GNN variant that feeds the degree
+vector directly to the Q-network without any message passing. The worst
+is the learnable-attention degree variant (7.66\,ms); the most complex
+model is the worst performer, likely because 200~episodes is
+insufficient for $\mathbf{W}_q$ to converge. Every topology-derived
+initialisation produces results indistinguishable from the one-hot
+baseline within run-to-run noise. The conclusion holds: within a
+short training budget, the GNN's topology encoding is a free parameter
+and what the Q-network routes on is the local congestion signal in $O_n$.
+
+\subsection{Topology Resilience}
+\label{sec:resilience}
+
+So far the finding that $V_n$ converges to an identity-like encoding is
+a neutral result: it does not help, but it does not actively hurt
+either. The picture changes when the network topology itself is
+modified. Any change that introduces a previously unseen node identifier
+--- specifically, adding a new router --- will produce an
+out-of-distribution input that a trained network cannot handle
+gracefully.
+
+We evaluate this using the nine variants from
+Section~\ref{sec:altinit}, trained for 200~episodes on Abilene at
+$D_r = 0.6$. We apply two mutations: inserting a new router (node~11,
+connected to existing nodes~0 and~8), and removing link~3--6.
+Performance is measured zero-shot immediately after the change and
+after 50 online adaptation episodes.
+
+\textbf{Link removal is handled gracefully.} After removing link~3--6
+all nine variants achieve 4.18--4.92\,ms zero-shot, already 36--43\%
+better than OSPF on the pre-change topology. The trained routing
+policies do not rely critically on any single link.
+
+\textbf{Node insertion exposes the identity encoding.} Adding node~11
+causes the three mean-aggregation GNN variants to fail
+catastrophically: 162--297\,ms zero-shot, compared to a pre-change
+baseline of $\approx 4$\,ms. During the $K = 8$ GNN warm-up iterations
+at the start of each episode, node~11's uninitialised feature vector
+$V_{11}$ enters the neighbourhood average of nodes~0 and~8, corrupting
+their converged $V_n$ representations before the Q-network can act.
+Attention variants are considerably more robust: the
+degree+learnable-attention variant achieves 5.57\,ms zero-shot, because
+it can downweight the contribution of the unfamiliar neighbour vector.
+Figure~\ref{fig:resilience} shows zero-shot and post-adaptation results
+for all variants.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{results/09_topo_init/adaptation_plot.png}
+\caption{Topology adaptation on Abilene ($D_r = 0.6$): zero-shot and
+after 50 adaptation episodes for node insertion and link removal. Mean-GNN
+variants fail catastrophically on node insertion; attention and
+fixed-encoding variants are robust. All variants recover within 50
+episodes.}
+\label{fig:resilience}
+\end{figure}
+
+All variants recover fully within 50 online adaptation episodes
+(4.0--4.7\,ms). The key takeaway is not specific to any single variant:
+the brittleness under node insertion is a consequence of
+parameterising the model by node identity. Any architecture relying on
+identity-based feature vectors will fail on unseen node IDs unless it
+can attenuate their influence, as the attention mechanism does here.
+
+\section{Conclusions}
+
+The goal of this project was to improve ScaIR's GNN component. What we
+found instead was that the component does not do what its design
+implies, and that understanding why leads to a more fundamental
+conclusion about this class of models.
+
+The sub-GNN in ScaIR does not learn a useful topology representation.
+Because it is initialised from one-hot node identifiers and updated
+exclusively from other node-identifier vectors, it converges to an
+encoding that is functionally equivalent to a static identity label.
+Replacing it with a fixed one-hot or a static neighbour-connectivity
+mask achieves the same or strictly better routing performance across all
+four topologies tested, within a 300-episode training budget. Replacing
+the mean aggregation with dot-product or learnable attention yields
+essentially the same result, because attention computed over
+node-identity vectors carries no routing-relevant signal. Seeding the
+GNN with structural topology properties (degree, betweenness) does not
+change the picture either: within the training budget, the Q-network
+adapts equally well to any fixed vector it receives, and the GNN's
+learned updates add no benefit.
+
+The routing gains over OSPF that ScaIR does achieve---and they are
+genuine, reaching up to 81\% reduction in delivery time under heavy
+congestion---come from the multi-agent DQN's ability to respond to
+local queue observations and from UCB exploration. The ScaIR
+paper~\cite{scair2025} argues that the GNN plays a key role based on
+feature-length ablations, but those experiments do not isolate the GNN:
+reducing $F_l$ also shrinks the destination one-hot and action-history
+blocks in the Q-network input, so the observed sensitivity is better
+explained by the Q-network needing a minimum input dimensionality to
+represent its routing policy. A fixed one-hot of sufficient length works
+just as well.
+
+The identity encoding does have a direct operational cost at one
+specific boundary condition: inserting a new router. When a new node
+joins the network, its one-hot feature is unknown to the trained
+$f_{w_n}$, and mean-aggregation GNN variants propagate this unknown
+vector into the representations of its neighbours, causing catastrophic
+performance degradation. Attention variants are more robust because they
+can downweight the unfamiliar input. All variants recover within 50
+online episodes, but the zero-shot failure of mean-GNN variants is a
+genuine deployment concern.
+
+The most likely reason the GNN does not contribute is the simulation
+environment itself. All links share the same fixed 1\,ms transmission
+time and there are no bandwidth constraints or propagation delays---the
+only source of variable latency is queue length. In this setting, a
+node's feature vector could at most encode which other nodes are its
+neighbours, which is exactly what a one-hot already encodes. In a
+richer environment with heterogeneous link capacities and geographic
+propagation delays, the GNN would have physically meaningful
+information to aggregate, and a learned representation could plausibly
+outperform a fixed one. We believe that is the right direction for
+future work, alongside replacing the one-hot node encodings throughout
+the architecture with permutation-invariant structural features---a
+change that would allow the model to generalise across topologies rather
+than memorising node identities.
+
+{\small
+\bibliographystyle{ieee_fullname}
+\begin{thebibliography}{10}
+
+\bibitem{dijkstra1959}
+E.~W. Dijkstra.
+\newblock A note on two problems in connexion with graphs.
+\newblock {\em Numerische Mathematik}, 1:269--271, 1959.
+
+\bibitem{survey_gnn_drl}
+X.~Shi, T.~Zhang, and others.
+\newblock A survey on graph neural networks and deep reinforcement learning
+  for network optimization.
+\newblock {\em IEEE Communications Surveys \& Tutorials}, 2023.
+
+\bibitem{upc_routing}
+J.~Su{\'a}rez-Varela et~al.
+\newblock Exploring a {GNN}-based routing optimization use case.
+\newblock In {\em IEEE/IFIP Network Operations and Management Symposium
+  (NOMS)}, 2022.
+
+\bibitem{autognn}
+R.~Almasan, J.~Su{\'a}rez-Varela, P.~Barlet-Ros, and A.~Cabellos-Aparicio.
+\newblock {AutoGNN}: Autograph neural network architecture for network management.
+\newblock {\em arXiv preprint arXiv:2201.10286}, 2022.
+
+\bibitem{strl}
+H.~Yu, J.~Zheng, B.~Li, and J.~Ren.
+\newblock Spatio-temporal graph reinforcement learning for adaptive traffic
+  routing.
+\newblock In {\em IEEE International Conference on Communications (ICC)}, 2022.
+
+\bibitem{scair2025}
+J.~Zhang, J.~Guan, K.~Liu, Y.~Hu, A.~Shen, and Y.~Ma.
+\newblock {ScaIR}: Scalable intelligent routing based on distributed graph
+  reinforcement learning.
+\newblock {\em Computer Networks}, 257:110915, 2025.
+
+\bibitem{you2020}
+X.~You, X.~Li, Y.~Xu, H.~Feng, J.~Zhao, and H.~Yan.
+\newblock Toward packet routing with fully distributed multiagent deep
+  reinforcement learning.
+\newblock {\em IEEE Transactions on Systems, Man, and Cybernetics},
+  52(2):855--868, 2020.
+
+\bibitem{boyan1994}
+J.~A. Boyan and M.~L. Littman.
+\newblock Packet routing in dynamically changing networks: A reinforcement
+  learning approach.
+\newblock In {\em Advances in Neural Information Processing Systems (NIPS)},
+  pages 671--678, 1994.
+
+\bibitem{knight2011}
+S.~Knight, H.~X. Nguyen, N.~Falkner, R.~Bowden, and M.~Roughan.
+\newblock The internet topology zoo.
+\newblock {\em IEEE Journal on Selected Areas in Communications},
+  29(9):1765--1775, 2011.
+
+\bibitem{sndlib}
+S.~Orlowski, R.~Wess{\"a}ly, M.~Pi{\'o}ro, and A.~Tomaszewski.
+\newblock {SNDlib} 1.0---survivable network design library.
+\newblock {\em Networks}, 55(3):276--286, 2010.
+
+\bibitem{velickovic2018}
+P.~Veli{\v{c}}kovi{\'c}, G.~Cucurull, A.~Casanova, A.~Romero, P.~Li{\`o},
+  and Y.~Bengio.
+\newblock Graph attention networks.
+\newblock In {\em International Conference on Learning Representations
+  (ICLR)}, 2018.
+
+\bibitem{init_ref1}
+[REF1 --- to be filled in by author].
+
+\bibitem{init_ref2}
+[REF2 --- to be filled in by author].
+
+\end{thebibliography}
+}
+
+\end{document}
